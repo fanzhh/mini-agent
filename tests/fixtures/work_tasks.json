@@ -1,0 +1,9 @@
+[
+  {"id": 101, "task_name": "示例检查安排A", "task_type": "inspection", "assignee": "alice", "start_date": "2026-09-03T09:00:00+08:00", "end_date": "2026-09-03T17:00:00+08:00"},
+  {"id": 102, "task_name": "示例抽样任务B", "task_type": "sampling", "assignee": "bob", "start_date": "2026-09-10T10:00:00+08:00", "end_date": "2026-09-10T12:00:00+08:00"},
+  {"id": 103, "task_name": "示例公文办理C", "task_type": "document", "assignee": "alice", "start_date": "2026-09-15T14:00:00+08:00", "end_date": "2026-09-15T16:00:00+08:00"},
+  {"id": 104, "task_name": "示例协查任务D", "task_type": "assist", "assignee": "carol", "start_date": "2026-09-20T09:30:00+08:00", "end_date": "2026-09-20T11:00:00+08:00"},
+  {"id": 105, "task_name": "示例培训安排E", "task_type": "training", "assignee": "bob", "start_date": "2026-09-28T13:00:00+08:00", "end_date": "2026-09-28T15:00:00+08:00"},
+  {"id": 106, "task_name": "示例八月事项F", "task_type": "other", "assignee": "alice", "start_date": "2026-08-12T09:00:00+08:00", "end_date": "2026-08-12T10:00:00+08:00"},
+  {"id": 107, "task_name": "示例十月事项G", "task_type": "other", "assignee": "carol", "start_date": "2026-10-05T09:00:00+08:00", "end_date": "2026-10-05T10:00:00+08:00"}
+]

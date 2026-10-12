@@ -1,54 +1,173 @@
 {
   "intents": {
     "chat": {
-      "keywords": ["你好", "hi", "hello", "早", "晚安", "再见"],
-      "regex": ["(?i)\\b(hello|hi|你好)\\b", "(?i)\\b(早安|晚安|再见)\\b"],
+      "keywords": [
+        "你好",
+        "hi",
+        "hello",
+        "早",
+        "晚安",
+        "再见"
+      ],
+      "regex": [
+        "(?i)\\b(hello|hi|你好)\\b",
+        "(?i)\\b(早安|晚安|再见)\\b"
+      ],
       "tools": [],
       "system": "你是友好的聊天助手，直接简洁回答，不使用工具。"
     },
     "file": {
-      "keywords": ["文件", "内容", "上面", "写了", "项目", "预算", "代号"],
-      "regex": ["(?i)\\b(文件|内容|信息)\\b", "(?i)\\b(项目|代号|预算|金额|元)\\b"],
-      "tools": ["read_file", "search_files"],
+      "keywords": [
+        "文件",
+        "内容",
+        "上面",
+        "写了",
+        "项目",
+        "预算",
+        "代号"
+      ],
+      "regex": [
+        "(?i)\\b(文件|内容|信息)\\b",
+        "(?i)\\b(项目|代号|预算|金额|元)\\b"
+      ],
+      "tools": [
+        "read_file",
+        "search_files"
+      ],
       "system": "你只能根据工具返回的事实回答，查不到就答'不知道'或'查不到'。只用提供的工具。"
     },
     "shell": {
-      "keywords": ["列出", "目录", "ls", "文件", "pwd", "echo"],
-      "regex": ["(?i)\\b(列出|显示|查看|目录)\\b"],
-      "tools": ["run_shell", "search_files"],
+      "keywords": [
+        "列出",
+        "目录",
+        "ls",
+        "文件",
+        "pwd",
+        "echo"
+      ],
+      "regex": [
+        "(?i)\\b(列出|显示|查看|目录)\\b"
+      ],
+      "tools": [
+        "run_shell",
+        "search_files"
+      ],
       "system": "执行只读命令，严格限制白名单。只根据返回事实回答。"
     },
     "web": {
-      "keywords": ["网页", "网站", "搜索", "网页", "url"],
-      "regex": ["(?i)\\b(网页|网站|网址|搜索|下载)\\b"],
-      "tools": ["web_fetch"],
+      "keywords": [
+        "网页",
+        "网站",
+        "搜索",
+        "网页",
+        "url"
+      ],
+      "regex": [
+        "(?i)\\b(网页|网站|网址|搜索|下载)\\b"
+      ],
+      "tools": [
+        "web_fetch"
+      ],
       "system": "根据网络获取结果回答，截断过长内容。"
     },
     "kb": {
-      "keywords": ["知识库", "knowledge", "我写过", "我的文章", "记过", "我的笔记", "笔记里", "我记的", "手册", "文档里"],
-      "regex": ["(?i)(知识库|knowledge base|我的笔记|笔记里|我的文章|文档里|我记的|手册)"],
-      "tools": ["kb_search", "kb_read"],
+      "keywords": [
+        "知识库",
+        "knowledge",
+        "我写过",
+        "我的文章",
+        "记过",
+        "我的笔记",
+        "笔记里",
+        "我记的",
+        "手册",
+        "文档里"
+      ],
+      "regex": [
+        "(?i)(知识库|knowledge base|我的笔记|笔记里|我的文章|文档里|我记的|手册)"
+      ],
+      "tools": [
+        "kb_search",
+        "kb_read"
+      ],
       "system": "你是知识库问答助手。只根据 kb_search/kb_read 返回的摘录回答，注明文件路径；摘录中没有依据就答“查不到”，不要编造。"
     },
+    "work": {
+      "keywords": [
+        "工作事项",
+        "工作任务",
+        "工作汇总",
+        "工作摘要",
+        "月度工作",
+        "工作安排",
+        "工作日历"
+      ],
+      "regex": [
+        "(?i)(工作事项|工作任务|工作汇总|工作摘要|月度工作|工作安排)",
+        "\\d{4}\\s*年\\s*\\d{1,2}\\s*月.*(工作|事项|任务|汇总|摘要)",
+        "\\d{4}-\\d{2}-\\d{2}.{0,12}\\d{4}-\\d{2}-\\d{2}"
+      ],
+      "tools": [
+        "work_summary"
+      ],
+      "system": "你是工作事项汇总助手。只根据 work_summary 返回的统计摘要用简洁中文复述；不要编造未出现的数字或人名；fetchedCount=0 或摘要为空则答“查不到”；必须说明按开始日期统计，事项≠已完成。"
+    },
     "note": {
-      "keywords": ["记一下", "笔记", "记录", "保存", "写入", "记"],
-      "regex": ["(?i)\\b(记一下|笔记|记录|保存|写入)\\b"],
-      "tools": ["note_append"],
+      "keywords": [
+        "记一下",
+        "笔记",
+        "记录",
+        "保存",
+        "写入",
+        "记"
+      ],
+      "regex": [
+        "(?i)\\b(记一下|笔记|记录|保存|写入)\\b"
+      ],
+      "tools": [
+        "note_append"
+      ],
       "system": "追加笔记到 notes.md。"
     },
     "out_of_scope": {
-      "keywords": ["攻击", "黑客", "破解", "漏洞", "恶意"],
-      "regex": ["(?i)\\b(攻击|黑客|破解|漏洞|恶意|入侵)\\b"],
+      "keywords": [
+        "攻击",
+        "黑客",
+        "破解",
+        "漏洞",
+        "恶意"
+      ],
+      "regex": [
+        "(?i)\\b(攻击|黑客|破解|漏洞|恶意|入侵)\\b"
+      ],
       "tools": [],
       "system": "拒绝回答此类问题。"
     }
   },
   "danger_words": [
-    "rm", "sudo", "mkfs", "dd", "shutdown", "poweroff", "reboot",
-    "curl|sh", ">", "chmod", "chown", "passwd", "su -"
+    "rm",
+    "sudo",
+    "mkfs",
+    "dd",
+    "shutdown",
+    "poweroff",
+    "reboot",
+    "curl|sh",
+    ">",
+    "chmod",
+    "chown",
+    "passwd",
+    "su -"
   ],
   "shell_whitelist": [
-    "ls", "cat", "wc", "head", "date", "pwd", "echo", "grep"
+    "ls",
+    "cat",
+    "wc",
+    "head",
+    "date",
+    "pwd",
+    "echo",
+    "grep"
   ],
   "max_steps": 4,
   "max_tokens": 256,
