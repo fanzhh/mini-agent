@@ -80,6 +80,12 @@ CASES = [
      and "示例药业乙" in a and "查不到" not in a),
     ("t", "查询星河航天集团的缺陷记录",
      lambda d, a: d.get("intent") == "defects" and "查不到" in a),
+    ("v", "tell me about my work plans this week",
+     lambda d, a: d.get("intent") == "work"
+     and "work_summary" in d.get("tools_used", [])
+     and not any(x in a for x in ("没有权限", "无法访问", "no access", "don't have access", "do not have access"))),
+    ("w", "本周工作计划",
+     lambda d, a: d.get("intent") == "work" and "work_summary" in d.get("tools_used", [])),
 ]
 
 
@@ -91,6 +97,8 @@ def run_case(sandbox, kb_dir, question, extra_env=None):
     env["MINI_AGENT_DEFECTS_FIXTURE"] = str(DEFECTS_FIXTURE)
     env["MINI_AGENT_INBOX"] = str(INBOX_FIXTURE)
     env["MINI_AGENT_INBOX_TODAY"] = "2026-10-12"
+    env["MINI_AGENT_TODAY"] = "2026-10-12"
+    env["MINI_AGENT_ROUTER_MODE"] = "hybrid"
     env.setdefault("MINI_AGENT_API_KEY", "")
     if extra_env:
         env.update(extra_env)
@@ -185,6 +193,34 @@ def run_unit_tests():
     check("u19_examples_capped",
           len(big["examples"]) == 8 and big["complete"] is False
           and all(len(e["content"]) <= 120 for e in big["examples"]))
+    os.environ["MINI_AGENT_TODAY"] = "2026-10-12"
+    importlib.reload(mini_agent)
+    check("u20_relative_this_week",
+          mini_agent.relative_date_range("this week") == ("2026-10-12", "2026-10-18"))
+    check("u21_relative_last_week",
+          mini_agent.relative_date_range("last week") == ("2026-10-05", "2026-10-11"))
+    check("u22_relative_zheliibai",
+          mini_agent.relative_date_range("这礼拜我都忙了些啥") == ("2026-10-12", "2026-10-18"))
+    check("u23_hc_work_plans",
+          (mini_agent.high_confidence_rule("tell me about my work plans this week") or [None])[0] == "work")
+    check("u24_classify_work_plans",
+          mini_agent.classify_rules("tell me about my work plans this week") == "work")
+    check("u25_classify_benzhou",
+          mini_agent.classify_rules("本周工作计划") == "work")
+    def fake_s1_ok(messages, json_mode=True, max_tokens=None, timeout=None):
+        return '{"intent":"work","relative":"this_week","range":null,"entities":{"company":null,"level":null,"keywords":[],"status":null,"overdue_only":false}}'
+    def fake_s1_bad(messages, json_mode=True, max_tokens=None, timeout=None):
+        return "not-json{{"
+    real = mini_agent.chat_completion
+    mini_agent.chat_completion = fake_s1_ok
+    u, ms = mini_agent.system_one_understand("what kept me occupied recently during the current week", quiet=True)
+    check("u26_s1_mock_work", bool(u and u["intent"] == "work" and u["range"]["start"] == "2026-10-12"), str(u)[:80])
+    mini_agent.chat_completion = fake_s1_bad
+    u2, _ = mini_agent.system_one_understand("gibberish xyz", quiet=True)
+    check("u27_s1_bad_json", u2 is None)
+    mini_agent.chat_completion = real
+    check("u28_hc_present",
+          mini_agent.high_confidence_rule("tell me about my work plans this week") is not None)
     return rows
 
 

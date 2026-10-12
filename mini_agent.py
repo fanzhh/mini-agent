@@ -56,6 +56,14 @@ WORK_URL = os.environ.get("MINI_AGENT_WORK_URL", "").strip()
 WORK_AUTH = os.environ.get("MINI_AGENT_WORK_AUTH", "").strip()  # 完整 Authorization 值；绝不打印
 WORK_TIMEOUT = float(os.environ.get("MINI_AGENT_WORK_TIMEOUT", "30"))
 
+# Router / System One（主理解层；答题仍用 MODEL）
+ROUTER_MODE = os.environ.get("MINI_AGENT_ROUTER_MODE", "hybrid").strip().lower() or "hybrid"
+S1_MODEL = os.environ.get("MINI_AGENT_S1_MODEL", "tev1:0.8b").strip() or "tev1:0.8b"
+S1_TIMEOUT = float(os.environ.get("MINI_AGENT_INTENT_TIMEOUT", "8"))
+TODAY_OVERRIDE = os.environ.get("MINI_AGENT_TODAY", "").strip()  # YYYY-MM-DD 测相对日期
+# System One 解析结果提示（供 run_work/inbox/defects 使用）
+UNDERSTANDING = None  # dict | None
+
 # 缺陷检索：只读；fixture 或与 work 共用的 six-unified MCP（可选 DEFECTS_* 覆盖）
 _DEFECTS_FIXTURE_ENV = os.environ.get("MINI_AGENT_DEFECTS_FIXTURE", "").strip()
 DEFECTS_FIXTURE = Path(_DEFECTS_FIXTURE_ENV).expanduser().resolve() if _DEFECTS_FIXTURE_ENV else None
@@ -374,7 +382,28 @@ def t_kb_read(args):
     return kb_read(args.get("path") or "", args.get("query") or args.get("q") or "")
 
 
+def soft_intent_fallback(question):
+    """S1 失败时的软规则兜底（非 highConfidence）。"""
+    q = (question or "").strip()
+    ql = q.lower()
+    if re.search(r"(?i)\b(my|mine)\b|我的", q) and re.search(
+            r"(?i)work|task|plan|schedule|工作|任务|计划|安排|忙", q):
+        return "work"
+    if re.search(r"(?i)\b(my|mine)\b|我的", q) and re.search(
+            r"(?i)todo|inbox|待办|收件箱|overdue", q):
+        return "inbox"
+    if (re.search(r"(?i)\b(my|mine)\b|我的", q) and re.search(
+            r"(?i)notes?|知识|笔记", q)) or re.search(r"(?i)knowledge\s+base", q):
+        return "kb" if KB else None
+    if re.search(r"(?i)defect|finding|缺陷|不符合", q):
+        return "defects"
+    if relative_date_range(q) and re.search(r"(?i)work|plan|task|工作|计划|安排|忙", q):
+        return "work"
+    return None
+
+
 def kb_fallback(question):
+
     """规则未命中且配置了知识库：提到“我/我的”的事实性问题归 kb（在模型分类之前）。"""
     if not KB:
         return False
@@ -465,9 +494,214 @@ def classify_model(question):
 
 
 # ---------------------------------------------------------------- 工作事项汇总（只读）
+
+def ref_today():
+    """返回今天 YYYY-MM-DD（可用 MINI_AGENT_TODAY 覆盖）。"""
+    if TODAY_OVERRIDE and re.fullmatch(r"\d{4}-\d{2}-\d{2}", TODAY_OVERRIDE):
+        return TODAY_OVERRIDE
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def relative_date_range(question, today=None):
+    """解析相对日期 → (start, end)；周=周一至周日。无匹配返回 None。"""
+    q = (question or "").strip()
+    ql = q.lower()
+    today = today or ref_today()
+    d = datetime.strptime(today, "%Y-%m-%d")
+    # week: Monday=0
+    mon = d.fromordinal(d.toordinal() - d.weekday())
+    sun = mon.fromordinal(mon.toordinal() + 6)
+
+    def fmt(x):
+        return x.strftime("%Y-%m-%d")
+
+    if re.search(r"(?i)\bthis\s+week\b|本周|这周|这礼拜", q):
+        return fmt(mon), fmt(sun)
+    if re.search(r"(?i)\blast\s+week\b|上周", q):
+        return fmt(mon.fromordinal(mon.toordinal() - 7)), fmt(mon.fromordinal(mon.toordinal() - 1))
+    if re.search(r"(?i)\bnext\s+week\b|下周", q):
+        return fmt(mon.fromordinal(mon.toordinal() + 7)), fmt(mon.fromordinal(mon.toordinal() + 13))
+    if re.search(r"(?i)\bthis\s+month\b|本月|这个月|当月", q):
+        start = d.replace(day=1)
+        if d.month == 12:
+            end = d.replace(year=d.year + 1, month=1, day=1).fromordinal(
+                d.replace(year=d.year + 1, month=1, day=1).toordinal() - 1)
+        else:
+            end = d.replace(month=d.month + 1, day=1).fromordinal(
+                d.replace(month=d.month + 1, day=1).toordinal() - 1)
+        # simpler with calendar
+        import calendar
+        last = calendar.monthrange(d.year, d.month)[1]
+        return f"{d.year}-{d.month:02d}-01", f"{d.year}-{d.month:02d}-{last:02d}"
+    if re.search(r"(?i)\blast\s+month\b|上个月|上月", q):
+        import calendar
+        y, m = (d.year - 1, 12) if d.month == 1 else (d.year, d.month - 1)
+        last = calendar.monthrange(y, m)[1]
+        return f"{y}-{m:02d}-01", f"{y}-{m:02d}-{last:02d}"
+    if re.search(r"(?i)\bnext\s+month\b|下个月|下月", q):
+        import calendar
+        y, m = (d.year + 1, 1) if d.month == 12 else (d.year, d.month + 1)
+        last = calendar.monthrange(y, m)[1]
+        return f"{y}-{m:02d}-01", f"{y}-{m:02d}-{last:02d}"
+    if re.search(r"(?i)\btoday\b|今天|今日", q):
+        return today, today
+    if re.search(r"(?i)\byesterday\b|昨天", q):
+        y = d.fromordinal(d.toordinal() - 1)
+        return fmt(y), fmt(y)
+    if re.search(r"(?i)\btomorrow\b|明天", q):
+        t = d.fromordinal(d.toordinal() + 1)
+        return fmt(t), fmt(t)
+    # relative token from System One
+    token = ql.strip()
+    token_map = {
+        "this_week": lambda: relative_date_range("this week", today),
+        "last_week": lambda: relative_date_range("last week", today),
+        "next_week": lambda: relative_date_range("next week", today),
+        "this_month": lambda: relative_date_range("this month", today),
+        "last_month": lambda: relative_date_range("last month", today),
+        "next_month": lambda: relative_date_range("next month", today),
+        "today": lambda: relative_date_range("today", today),
+        "yesterday": lambda: relative_date_range("yesterday", today),
+        "tomorrow": lambda: relative_date_range("tomorrow", today),
+    }
+    if token in token_map:
+        return token_map[token]()
+    return None
+
+
+def high_confidence_rule(question):
+    """仅强匹配；返回 (intent, reason) 或 None。弱匹配交给 System One。"""
+    q = (question or "").strip()
+    if re.search(r"(?i)\b(work\s+plans?|work\s+tasks?|my\s+work|weekly\s+work|work\s+summary)\b", q) and \
+       re.search(r"(?i)this\s+week|last\s+week|next\s+week|本周|这周|这礼拜|上周|下周|本月", q):
+        return "work", "highConfidence: work+relative"
+    if re.search(r"工作事项|工作汇总|工作摘要|月度工作|本周工作计划", q):
+        return "work", "highConfidence: zh work phrase"
+    if re.search(r"(?i)(超期待办|anything\s+overdue|pending\s+tasks?)|(收件箱.{0,6}(超期|待办))", q):
+        return "inbox", "highConfidence: inbox/overdue"
+    if re.search(r"(?i)(serious\s+findings?|严重缺陷)|缺陷记录", q):
+        return "defects", "highConfidence: defects"
+    if re.search(r"(?i)what\s+did\s+my\s+notes|notes\s+say\s+about|我的笔记里|知识库里", q):
+        return "kb", "highConfidence: kb notes"
+    if re.fullmatch(r"(?i)\s*(hi|hello|你好|早|晚安|再见)\s*[!！.。]?\s*", q):
+        return "chat", "highConfidence: greeting"
+    return None
+
+
+S1_INTENTS = {"kb", "work", "inbox", "defects", "chat", "note", "file", "shell", "web", "out_of_scope"}
+S1_RELATIVE = {"this_week", "last_week", "next_week", "this_month", "last_month",
+               "next_month", "today", "yesterday", "tomorrow", None, "null"}
+
+
+def validate_understanding(obj):
+    """校验 System One JSON；合法返回规范化 dict，否则 None。"""
+    if not isinstance(obj, dict):
+        return None
+    intent = obj.get("intent")
+    if intent not in S1_INTENTS:
+        return None
+    relative = obj.get("relative")
+    if relative in ("null", ""):
+        relative = None
+    if relative not in S1_RELATIVE:
+        return None
+    rng = obj.get("range")
+    start = end = None
+    if isinstance(rng, dict):
+        start, end = rng.get("start"), rng.get("end")
+        if start and end:
+            if not (re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(start)) and
+                    re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(end)) and start <= end):
+                return None
+        else:
+            start = end = None
+            rng = None
+    elif rng not in (None, "null"):
+        return None
+    if start is None and relative:
+        bounds = relative_date_range(relative)
+        if bounds:
+            start, end = bounds
+    entities = obj.get("entities") if isinstance(obj.get("entities"), dict) else {}
+    level = entities.get("level")
+    if level in ("null", ""):
+        level = None
+    if level not in (None, "serious", "major", "minor"):
+        level = None
+    status = entities.get("status")
+    if status in ("null", ""):
+        status = None
+    if status not in (None, "pending", "completed", "all"):
+        status = None
+    kws = entities.get("keywords") or []
+    if not isinstance(kws, list):
+        kws = []
+    return {
+        "intent": intent,
+        "relative": relative,
+        "range": {"start": start, "end": end} if start and end else None,
+        "entities": {
+            "company": entities.get("company") or None,
+            "level": level,
+            "keywords": [str(k) for k in kws if k][:8],
+            "status": status,
+            "overdue_only": bool(entities.get("overdue_only")),
+        },
+    }
+
+
+def system_one_understand(question, quiet=True):
+    """System One 主理解：用 S1_MODEL 输出受限 JSON。返回 (understanding|None, duration_ms)。"""
+    t0 = time.time()
+    sys_prompt = (
+        "You are a request router (System One). Output ONLY one JSON object, no markdown.\n"
+        'Schema: {"intent":"kb|work|inbox|defects|chat|note|file|shell|web|out_of_scope",'
+        '"relative":"this_week|last_week|next_week|this_month|last_month|next_month|today|yesterday|tomorrow|null",'
+        '"range":null or {"start":"YYYY-MM-DD","end":"YYYY-MM-DD"},'
+        '"entities":{"company":null,"level":"serious|major|minor|null","keywords":[],'
+        '"status":"pending|completed|all|null","overdue_only":false}}\n'
+        "intent guide: work=job schedule/plans/what I was busy with; "
+        "inbox=personal todos/overdue; defects=inspection findings; "
+        "kb=notes/knowledge questions; chat=greeting/chitchat only.\n"
+        "For 'this week/本周/这礼拜' set relative=this_week. Prefer work over chat for my work/plans/tasks."
+    )
+    # temporarily call with S1 model
+    global MODEL
+    old_model = MODEL
+    try:
+        # inject model via local override using chat_completion body — patch through env
+        os.environ["MINI_AGENT_MODEL_OVERRIDE_S1"] = S1_MODEL
+        content = chat_completion(
+            [{"role": "system", "content": sys_prompt},
+             {"role": "user", "content": question}],
+            json_mode=True, max_tokens=96, timeout=S1_TIMEOUT)
+    finally:
+        os.environ.pop("MINI_AGENT_MODEL_OVERRIDE_S1", None)
+    ms = int((time.time() - t0) * 1000)
+    obj = extract_json(content) if content else None
+    understanding = validate_understanding(obj) if obj else None
+    if understanding:
+        trace("intent_systemone", quiet, intent=understanding["intent"],
+              relative=understanding.get("relative"), range=understanding.get("range"),
+              entities=understanding.get("entities"), duration_ms=ms, model=S1_MODEL)
+    else:
+        trace("intent_systemone_fail", quiet, duration_ms=ms, model=S1_MODEL,
+              raw=(content or "")[:200])
+    return understanding, ms
+
+
 def parse_work_range(question):
     """从问题确定性解析 (start_date, end_date)；失败返回 None。"""
     q = (question or "").strip()
+    # System One / UNDERSTANDING hint
+    global UNDERSTANDING
+    if UNDERSTANDING and isinstance(UNDERSTANDING.get("range"), dict):
+        r = UNDERSTANDING["range"]
+        if r.get("start") and r.get("end"):
+            return r["start"], r["end"]
+    rel = relative_date_range(q)
+    if rel:
+        return rel
     # 显式区间
     m = re.search(
         r"(\d{4}-\d{2}-\d{2})\s*(?:到|至|~|—|–|-|～)\s*(\d{4}-\d{2}-\d{2})", q)
@@ -847,20 +1081,9 @@ def parse_inbox_filters(question):
     if m:
         opts["start_date"], opts["end_date"] = m.group(1), m.group(2)
     else:
-        today = inbox_today()
-        d = datetime.strptime(today, "%Y-%m-%d")
-        if re.search(r"今天|今日", q):
-            opts["start_date"] = opts["end_date"] = today
-        elif re.search(r"本周", q):
-            start = d.fromordinal(d.toordinal() - d.weekday())  # Monday
-            end = start.fromordinal(start.toordinal() + 6)
-            opts["start_date"] = start.strftime("%Y-%m-%d")
-            opts["end_date"] = end.strftime("%Y-%m-%d")
-        elif re.search(r"上周", q):
-            start = d.fromordinal(d.toordinal() - d.weekday() - 7)
-            end = start.fromordinal(start.toordinal() + 6)
-            opts["start_date"] = start.strftime("%Y-%m-%d")
-            opts["end_date"] = end.strftime("%Y-%m-%d")
+        rel = relative_date_range(q)
+        if rel:
+            opts["start_date"], opts["end_date"] = rel
     # 关键词：优先「关于X的」；否则少量显式词
     m = re.search(r"关于\s*([^\s的]{2,40}?)\s*的", q)
     if m:
@@ -1039,6 +1262,8 @@ def map_defects_level(text):
 
 def parse_defects_filters(question):
     """确定性解析企业名/级别/关键词/日期区间；保守提取，宁缺毋滥。"""
+    global UNDERSTANDING
+    _s1 = UNDERSTANDING if isinstance(UNDERSTANDING, dict) else None
     q = (question or "").strip()
     opts = {"company_name": None, "level": None, "content_keywords": None,
             "law": None, "start_date": None, "end_date": None}
@@ -1066,6 +1291,17 @@ def parse_defects_filters(question):
         if kw in q:
             opts["content_keywords"] = opts["content_keywords"] or kw
             break
+    if _s1:
+        ent = _s1.get("entities") or {}
+        if ent.get("company") and not opts.get("company_name"):
+            opts["company_name"] = ent["company"]
+        if ent.get("level") and not opts.get("level"):
+            opts["level"] = ent["level"]
+        if ent.get("keywords") and not opts.get("content_keywords"):
+            opts["content_keywords"] = " ".join(ent["keywords"][:4])
+        rng = _s1.get("range") or {}
+        if rng.get("start") and rng.get("end") and not (opts.get("start_date") and opts.get("end_date")):
+            opts["start_date"], opts["end_date"] = rng["start"], rng["end"]
     return opts
 
 
@@ -1508,25 +1744,45 @@ def tool_msg(tool, result, question):
             f"请只根据上面的内容回答原问题：{question}\n内容里确实没有答案才答“查不到”。")
 
 def run_agent(question, quiet=False):
+    global UNDERSTANDING
+    UNDERSTANDING = None
     danger = match_danger(question)
-    rule_intent = classify_rules(question)
     if danger:  # 危险词直接拦截，不进模型
+        rule_intent = classify_rules(question)
         intent = rule_intent or "out_of_scope"
         trace("danger", quiet, intent=intent, word=danger)
         return {"intent": intent, "risk": "danger", "tools_used": [],
                 "answer": DANGER_RESPONSE}
 
-    if rule_intent:
-        intent = rule_intent
-        trace("intent_rules", quiet, intent=intent)
-    elif (intent := laya_predict(question)) is not None:
-        trace("intent_laya", quiet, intent=intent)
-    elif kb_fallback(question):
-        intent = "kb"
-        trace("intent_kb_fallback", quiet, intent=intent)
+    # Hybrid: 高置信规则快路径 → 否则 System One 主理解 → 软兜底
+    hc = high_confidence_rule(question)
+    s1_ms = 0
+    if ROUTER_MODE == "rule":
+        intent = classify_rules(question) or soft_intent_fallback(question) or "chat"
+        trace("intent_rules", quiet, intent=intent, mode="rule")
+    elif hc and ROUTER_MODE in ("hybrid", "rule"):
+        intent, reason = hc
+        trace("intent_rules", quiet, intent=intent, reason=reason, high_confidence=True)
     else:
-        intent = classify_model(question)
-        trace("intent_model", quiet, intent=intent)
+        # System One primary (hybrid/systemone)
+        understanding, s1_ms = (None, 0)
+        if ROUTER_MODE in ("hybrid", "systemone"):
+            understanding, s1_ms = system_one_understand(question, quiet)
+        if understanding:
+            UNDERSTANDING = understanding
+            intent = understanding["intent"]
+        else:
+            intent = classify_rules(question) or soft_intent_fallback(question)
+            if intent:
+                trace("intent_fallback", quiet, intent=intent, after_s1_ms=s1_ms)
+            elif (intent := laya_predict(question)) is not None:
+                trace("intent_laya", quiet, intent=intent)
+            elif kb_fallback(question):
+                intent = "kb"
+                trace("intent_kb_fallback", quiet, intent=intent)
+            else:
+                intent = "chat"
+                trace("intent_chat_default", quiet, intent=intent, after_s1_ms=s1_ms)
 
     if intent == "kb":  # 确定性流程：模型不参与工具选择
         return run_kb(question, quiet)

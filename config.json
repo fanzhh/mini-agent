@@ -81,10 +81,18 @@
         "笔记里",
         "我记的",
         "手册",
-        "文档里"
+        "文档里",
+        "notes",
+        "my notes",
+        "knowledge base",
+        "notebook",
+        "what did my notes"
       ],
       "regex": [
-        "(?i)(知识库|knowledge base|我的笔记|笔记里|我的文章|文档里|我记的|手册)"
+        "(?i)(知识库|knowledge base|我的笔记|笔记里|我的文章|文档里|我记的|手册)",
+        "(?i)\\b(my\\s+notes|knowledge\\s+base|notebook)\\b",
+        "(?i)what\\s+did\\s+my\\s+notes",
+        "(?i)notes\\s+say\\s+about"
       ],
       "tools": [
         "kb_search",
@@ -100,11 +108,19 @@
         "超期",
         "逾期",
         "未完成事项",
-        "Inbox"
+        "Inbox",
+        "todo",
+        "todos",
+        "to-do",
+        "overdue",
+        "pending tasks",
+        "anything overdue"
       ],
       "regex": [
         "(?i)(收件箱|inbox|待办|超期|逾期|未完成事项)",
-        "(?i)\\binbox\\b"
+        "(?i)\\binbox\\b",
+        "(?i)\\b(todos?|to-?do|overdue|pending\\s+tasks?)\\b",
+        "(?i)anything\\s+overdue"
       ],
       "tools": [
         "inbox_query"
@@ -119,12 +135,25 @@
         "工作摘要",
         "月度工作",
         "工作安排",
-        "工作日历"
+        "工作日历",
+        "work plans",
+        "work plan",
+        "work tasks",
+        "my work",
+        "schedule",
+        "weekly work",
+        "work summary",
+        "plans this week",
+        "busy"
       ],
       "regex": [
         "(?i)(工作事项|工作任务|工作汇总|工作摘要|月度工作|工作安排)",
         "\\d{4}\\s*年\\s*\\d{1,2}\\s*月.*(工作|事项|任务|汇总|摘要)",
-        "\\d{4}-\\d{2}-\\d{2}.{0,12}\\d{4}-\\d{2}-\\d{2}"
+        "\\d{4}-\\d{2}-\\d{2}.{0,12}\\d{4}-\\d{2}-\\d{2}",
+        "(?i)\\b(work\\s+plans?|work\\s+tasks?|my\\s+work|schedule|weekly\\s+work)\\b",
+        "(?i)\\b(plans?\\s+this\\s+week|this\\s+week.{0,20}(work|plan|task|busy))\\b",
+        "(本周|这周|这礼拜).{0,12}(工作|计划|安排|忙)",
+        "(工作|计划|安排).{0,12}(本周|这周|这礼拜)"
       ],
       "tools": [
         "work_summary"
@@ -138,10 +167,18 @@
         "不符合项",
         "缺陷记录",
         "严重缺陷",
-        "主要缺陷"
+        "主要缺陷",
+        "defects",
+        "findings",
+        "nonconformity",
+        "nonconformities",
+        "CAPA",
+        "serious findings"
       ],
       "regex": [
-        "(?i)(缺陷|defect|不符合项)"
+        "(?i)(缺陷|defect|不符合项)",
+        "(?i)\\b(defects?|findings?|nonconformit(?:y|ies)|CAPA)\\b",
+        "(?i)serious\\s+findings?"
       ],
       "tools": [
         "defects_search"
