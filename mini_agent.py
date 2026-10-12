@@ -171,18 +171,22 @@ def laya_predict(question):
 
 
 # ---------------------------------------------------------------- 模型接口
-def chat_completion(messages, json_mode=True, max_tokens=None, timeout=None):
+def chat_completion(messages, json_mode=True, max_tokens=None, timeout=None, model=None):
     """调 OpenAI 兼容 /chat/completions（temperature=0，小 max_tokens）。
-    附 response_format=json_object；服务器报 4xx 则去掉后重试一次。连接层失败标记模型不可用。"""
+    附 response_format=json_object；服务器报 4xx 则去掉后重试一次。连接层失败标记模型不可用。
+    model= 可覆盖全局 MODEL（System One 用 S1_MODEL）。"""
     global model_available
     if not model_available:
         return None
+    use_model = (model or os.environ.get("MINI_AGENT_MODEL_OVERRIDE_S1") or MODEL or "").strip()
     body = {"messages": messages, "temperature": 0, "max_tokens": max_tokens or MAX_TOKENS}
-    if MODEL:
-        body["model"] = MODEL
+    if use_model:
+        body["model"] = use_model
     headers = {"Content-Type": "application/json"}
     if API_KEY:
         headers["Authorization"] = "Bearer " + API_KEY
+    # Per-call timeout: S1 parse should not wait for answer-model TIMEOUT
+    req_timeout = TIMEOUT if timeout is None else timeout
     use_rf = json_mode
     while True:
         if use_rf:
@@ -193,7 +197,7 @@ def chat_completion(messages, json_mode=True, max_tokens=None, timeout=None):
                                      data=json.dumps(body).encode("utf-8"),
                                      headers=headers, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+            with urllib.request.urlopen(req, timeout=req_timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8", "ignore"))
             return data["choices"][0]["message"].get("content") or ""
         except urllib.error.HTTPError as exc:
@@ -202,7 +206,9 @@ def chat_completion(messages, json_mode=True, max_tokens=None, timeout=None):
                 continue
             return None
         except Exception:
-            model_available = False
+            # Do not mark answer model unavailable when a temporary S1 override fails
+            if not model and not os.environ.get("MINI_AGENT_MODEL_OVERRIDE_S1"):
+                model_available = False
             return None
 
 
@@ -665,18 +671,10 @@ def system_one_understand(question, quiet=True):
         "kb=notes/knowledge questions; chat=greeting/chitchat only.\n"
         "For 'this week/本周/这礼拜' set relative=this_week. Prefer work over chat for my work/plans/tasks."
     )
-    # temporarily call with S1 model
-    global MODEL
-    old_model = MODEL
-    try:
-        # inject model via local override using chat_completion body — patch through env
-        os.environ["MINI_AGENT_MODEL_OVERRIDE_S1"] = S1_MODEL
-        content = chat_completion(
-            [{"role": "system", "content": sys_prompt},
-             {"role": "user", "content": question}],
-            json_mode=True, max_tokens=96, timeout=S1_TIMEOUT)
-    finally:
-        os.environ.pop("MINI_AGENT_MODEL_OVERRIDE_S1", None)
+    content = chat_completion(
+        [{"role": "system", "content": sys_prompt},
+         {"role": "user", "content": question}],
+        json_mode=True, max_tokens=96, timeout=S1_TIMEOUT, model=S1_MODEL)
     ms = int((time.time() - t0) * 1000)
     obj = extract_json(content) if content else None
     understanding = validate_understanding(obj) if obj else None

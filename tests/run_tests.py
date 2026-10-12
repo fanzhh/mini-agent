@@ -207,9 +207,9 @@ def run_unit_tests():
           mini_agent.classify_rules("tell me about my work plans this week") == "work")
     check("u25_classify_benzhou",
           mini_agent.classify_rules("本周工作计划") == "work")
-    def fake_s1_ok(messages, json_mode=True, max_tokens=None, timeout=None):
+    def fake_s1_ok(messages, json_mode=True, max_tokens=None, timeout=None, model=None, **kwargs):
         return '{"intent":"work","relative":"this_week","range":null,"entities":{"company":null,"level":null,"keywords":[],"status":null,"overdue_only":false}}'
-    def fake_s1_bad(messages, json_mode=True, max_tokens=None, timeout=None):
+    def fake_s1_bad(messages, json_mode=True, max_tokens=None, timeout=None, model=None, **kwargs):
         return "not-json{{"
     real = mini_agent.chat_completion
     mini_agent.chat_completion = fake_s1_ok
