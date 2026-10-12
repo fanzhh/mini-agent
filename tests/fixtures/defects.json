@@ -1,0 +1,15 @@
+{
+  "success": true,
+  "count": 9,
+  "data": [
+    {"id": "D-9001", "company_id": "C-7001", "company_name": "示例药业甲", "check_date": "2026-09-05", "level": "serious", "content": "无菌工艺车间清洁验证未证明可有效清除上一批次残留，缺乏检测数据支撑。", "law": "药品生产质量管理规范", "clause": "第一百九十六条"},
+    {"id": "D-9002", "company_id": "C-7001", "company_name": "示例药业甲", "check_date": "2026-09-05", "level": "major", "content": "部分批生产记录存在涂改且未签名确认，可追溯性不足。", "law": "药品生产质量管理规范", "clause": "第一百七十条"},
+    {"id": "D-9003", "company_id": "C-7001", "company_name": "示例药业甲", "check_date": "2026-09-06", "level": "minor", "content": "冷库温度记录个别时段缺记，需补充说明。", "law": "药品生产质量管理规范", "clause": "第一百六十一条"},
+    {"id": "D-9004", "company_id": "C-7002", "company_name": "示例药业乙", "check_date": "2026-08-18", "level": "serious", "content": "偏差处理流程未执行，重大偏差未按规程评估对产品的影响即放行。", "law": "药品生产质量管理规范", "clause": "第二百二十三条"},
+    {"id": "D-9005", "company_id": "C-7002", "company_name": "示例药业乙", "check_date": "2026-08-18", "level": "major", "content": "检验方法变更后未完成验证即投入使用。", "law": "药品生产质量管理规范", "clause": "第二百七十五条"},
+    {"id": "D-9006", "company_id": "C-7002", "company_name": "示例药业乙", "check_date": "2026-07-30", "level": "minor", "content": "部分设施设备使用状态标识更新不及时。", "law": "药品生产质量管理规范", "clause": "第九十六条"},
+    {"id": "D-9007", "company_id": "C-7001", "company_name": "示例药业甲", "check_date": "2026-10-02", "level": "major", "content": "清洁验证只覆盖常用两种产品，未包括最难清洁品种。", "law": "药品生产质量管理规范", "clause": "第一百九十七条"},
+    {"id": "D-9008", "company_id": "C-7002", "company_name": "示例药业乙", "check_date": "2026-06-20", "level": "serious", "content": "关键岗位人员未经培训即独立上岗操作无菌灌装线。", "law": "药品生产质量管理规范", "clause": "第二十八条"},
+    {"id": "D-9009", "company_id": "C-7002", "company_name": "示例药业乙", "check_date": "2026-06-20", "level": "minor", "content": "文件版本管理存在过期受控本未及时收回的情况。", "law": "药品生产质量管理规范", "clause": "第一百三十六条"}
+  ]
+}

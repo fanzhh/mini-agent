@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 INFO_CONTENT = "项目代号：青松，预算 37 万元"
 WORK_FIXTURE = ROOT / "tests" / "fixtures" / "work_tasks.json"
 INBOX_FIXTURE = ROOT / "tests" / "fixtures" / "inbox.md"
+DEFECTS_FIXTURE = ROOT / "tests" / "fixtures" / "defects.json"
 
 KB_FARM = "01_AREAS/work/2026-10-01-blueberry-farm.md"
 KB_FARM_CONTENT = "# 蓝莓基地报告\n蓝莓基地今年亩产 820 公斤，负责人老周。"
@@ -70,6 +71,15 @@ CASES = [
      and ("未完成" in a or "pending" in a or "待办" in a or "示例" in a or "学习" in a or "买火车" in a)),
     ("p", "收件箱里关于火星殖民计划xyz的待办",
      lambda d, a: d.get("intent") == "inbox" and "查不到" in a),
+    ("r", "查询示例药业甲的严重缺陷",
+     lambda d, a: d.get("intent") == "defects"
+     and "defects_search" in d.get("tools_used", [])
+     and "示例药业甲" in a and "serious" in a and "9001" in a),
+    ("s", "示例药业乙在2026-08-01至2026-08-31的缺陷记录有哪些",
+     lambda d, a: d.get("intent") == "defects"
+     and "示例药业乙" in a and "查不到" not in a),
+    ("t", "查询星河航天集团的缺陷记录",
+     lambda d, a: d.get("intent") == "defects" and "查不到" in a),
 ]
 
 
@@ -78,6 +88,7 @@ def run_case(sandbox, kb_dir, question, extra_env=None):
     env["MINI_AGENT_SANDBOX"] = str(sandbox)
     env["MINI_AGENT_KB"] = str(kb_dir)
     env["MINI_AGENT_WORK_FIXTURE"] = str(WORK_FIXTURE)
+    env["MINI_AGENT_DEFECTS_FIXTURE"] = str(DEFECTS_FIXTURE)
     env["MINI_AGENT_INBOX"] = str(INBOX_FIXTURE)
     env["MINI_AGENT_INBOX_TODAY"] = "2026-10-12"
     env.setdefault("MINI_AGENT_API_KEY", "")
@@ -137,6 +148,43 @@ def run_unit_tests():
     od = mini_agent.query_inbox_tasks(ip, {"overdue_only": True, "status": "pending", "today": "2026-10-12"})
     check("u10_inbox_overdue_count", od["totalFound"] >= 2 and od["file"] == "inbox.md", str(od["totalFound"]))
     check("u11_inbox_basename", "/" not in od["file"])
+    # defects 纯函数
+    os.environ["MINI_AGENT_DEFECTS_FIXTURE"] = str(DEFECTS_FIXTURE)
+    importlib.reload(mini_agent)
+    check("u12_level_map",
+          mini_agent.map_defects_level("严重缺陷") == "serious"
+          and mini_agent.map_defects_level("主要缺陷") == "major"
+          and mini_agent.map_defects_level("重大缺陷") == "major"
+          and mini_agent.map_defects_level("一般缺陷") == "minor"
+          and mini_agent.map_defects_level("缺陷") is None)
+    f = mini_agent.parse_defects_filters("查询示例药业甲的严重缺陷")
+    check("u13_parse_company_level",
+          f["company_name"] == "示例药业甲" and f["level"] == "serious", str(f))
+    f2 = mini_agent.parse_defects_filters("示例药业乙在2026-08-01至2026-08-31的缺陷记录")
+    check("u14_parse_dates",
+          f2["company_name"] == "示例药业乙" and f2["start_date"] == "2026-08-01"
+          and f2["end_date"] == "2026-08-31", str(f2))
+    check("u15_dedupe_defects",
+          len(mini_agent.dedupe_defect_rows(
+              [{"id": "X1"}, {"id": "X1"}, {"id": "X2"}])) == 2)
+    try:
+        mini_agent.dedupe_defect_rows([{"company_name": "无id"}])
+        check("u16_missing_id", False, "should raise")
+    except ValueError:
+        check("u16_missing_id", True)
+    s = mini_agent.query_defects({"company_name": "示例药业甲", "level": "serious"})
+    check("u17_fixture_query",
+          s["fetchedCount"] == 1 and s["complete"] is True
+          and s["byLevel"]["serious"] == 1
+          and s["examples"][0]["company_name"] == "示例药业甲"
+          and len(s["examples"][0]["content"]) <= 120, str(s["fetchedCount"]))
+    s2 = mini_agent.query_defects({})
+    check("u18_no_filters_complete", s2["complete"] is True and s2["fetchedCount"] == 9, str(s2))
+    big = mini_agent.summarize_defects([{"id": i, "level": "minor", "content": "c" * 500}
+                                        for i in range(10)], {}, False)
+    check("u19_examples_capped",
+          len(big["examples"]) == 8 and big["complete"] is False
+          and all(len(e["content"]) <= 120 for e in big["examples"]))
     return rows
 
 
@@ -186,6 +234,16 @@ def main():
         except Exception as exc:
             ok, detail = False, f"异常: {exc}"
         rows.append(("q", "inbox未配置", ok, detail))
+        passed += ok
+        try:
+            data = run_case(sandbox, kb_dir, "查询示例药业甲的严重缺陷",
+                            extra_env={"MINI_AGENT_DEFECTS_FIXTURE": "", "MINI_AGENT_WORK_URL": "",
+                                       "MINI_AGENT_DEFECTS_URL": "", "MINI_AGENT_WORK_FIXTURE": str(WORK_FIXTURE)})
+            ok = "未配置" in data.get("answer", "") and ("缺陷" in data.get("answer", "") or "DEFECTS" in data.get("answer", "") or "WORK_URL" in data.get("answer", ""))
+            detail = data.get("answer", "").replace("\n", " ")[:60]
+        except Exception as exc:
+            ok, detail = False, f"异常: {exc}"
+        rows.append(("u", "defects未配置", ok, detail))
         passed += ok
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
