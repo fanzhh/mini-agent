@@ -25,7 +25,7 @@ from datetime import datetime
 from pathlib import Path
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
-INTENTS = ["chat", "file", "shell", "web", "note", "kb", "work", "inbox", "defects", "out_of_scope"]
+INTENTS = ["chat", "file", "shell", "web", "note", "kb", "work", "inbox", "defects", "add_event", "out_of_scope"]
 
 with open(CONFIG_PATH, encoding="utf-8") as _f:
     CFG = json.load(_f)
@@ -55,6 +55,14 @@ WORK_FIXTURE = Path(_WORK_FIXTURE).expanduser().resolve() if _WORK_FIXTURE else 
 WORK_URL = os.environ.get("MINI_AGENT_WORK_URL", "").strip()
 WORK_AUTH = os.environ.get("MINI_AGENT_WORK_AUTH", "").strip()  # 完整 Authorization 值；绝不打印
 WORK_TIMEOUT = float(os.environ.get("MINI_AGENT_WORK_TIMEOUT", "30"))
+# add_event 写入：仅 db_create_task；CREATE_SINK 为假后端（测试）；不设则走 WORK_URL
+WORK_CREATE_SINK = os.environ.get("MINI_AGENT_WORK_CREATE_SINK", "").strip()
+WORK_PERSON = os.environ.get("MINI_AGENT_WORK_PERSON", "").strip()  # 可选负责人
+ADD_EVENT_TASK_TYPE = os.environ.get("MINI_AGENT_ADD_EVENT_TASK_TYPE", "other").strip() or "other"
+ADD_EVENT_CREATE_BY = os.environ.get("MINI_AGENT_ADD_EVENT_CREATE_BY", "wee").strip() or "wee"
+# missing-skill wishlist（本地 JSONL；默认 sandbox/wishlist.jsonl）
+_WISHLIST_ENV = os.environ.get("MINI_AGENT_WISHLIST", "").strip()
+WISHLIST_PATH = Path(_WISHLIST_ENV).expanduser().resolve() if _WISHLIST_ENV else None  # resolved later vs SANDBOX
 
 # Router / System One（主理解层；答题仍用 MODEL）
 ROUTER_MODE = os.environ.get("MINI_AGENT_ROUTER_MODE", "hybrid").strip().lower() or "hybrid"
@@ -132,6 +140,10 @@ def classify_rules(question):
         scores[name] = score
         if score > best_score:
             best, best_score = name, score
+    # add_event 优先于 work/note：明确「增加/创建事件」写入，不是查询汇总
+    add_event_score = scores.get("add_event", 0)
+    if add_event_score > 0 and add_event_score >= scores.get("work", 0)             and add_event_score >= scores.get("note", 0)             and add_event_score >= scores.get("inbox", 0):
+        return "add_event"
     # inbox 优先于 note：收件箱/待办/超期（与 work 冲突时：工作事项/汇总归 work）
     inbox_score = scores.get("inbox", 0)
     work_score = scores.get("work", 0)
@@ -585,6 +597,8 @@ def relative_date_range(question, today=None):
 def high_confidence_rule(question):
     """仅强匹配；返回 (intent, reason) 或 None。弱匹配交给 System One。"""
     q = (question or "").strip()
+    if re.search(r"(增加|添加|新建|创建).{0,12}(事件|工作事项)", q) or        re.search(r"向.{0,16}(数据库|six).{0,16}(增加|添加|新建|写入)", q) or        re.search(r"(?i)\b(add|create)\b.{0,20}\b(event|task)\b", q):
+        return "add_event", "highConfidence: create event/task"
     if re.search(r"(?i)\b(work\s+plans?|work\s+tasks?|my\s+work|weekly\s+work|work\s+summary)\b", q) and \
        re.search(r"(?i)this\s+week|last\s+week|next\s+week|本周|这周|这礼拜|上周|下周|本月", q):
         return "work", "highConfidence: work+relative"
@@ -601,7 +615,7 @@ def high_confidence_rule(question):
     return None
 
 
-S1_INTENTS = {"kb", "work", "inbox", "defects", "chat", "note", "file", "shell", "web", "out_of_scope"}
+S1_INTENTS = {"kb", "work", "inbox", "defects", "add_event", "chat", "note", "file", "shell", "web", "out_of_scope"}
 S1_RELATIVE = {"this_week", "last_week", "next_week", "this_month", "last_month",
                "next_month", "today", "yesterday", "tomorrow", None, "null"}
 
@@ -691,7 +705,8 @@ S1_QUESTIONS = {
         "type": "choice",
         "instructions": "Which intent best matches the user request?",
         "criteria": {
-            "work": "Job schedule, work plans, what I was busy with at work",
+            "work": "Query/list job schedule, work plans, what I was busy with (read-only)",
+            "add_event": "Create/add a new work event or task into the six database (write)",
             "inbox": "Personal todos, overdue tasks, inbox items",
             "defects": "Inspection findings / defect records search",
             "kb": "Notes or knowledge-base questions",
@@ -766,17 +781,20 @@ def system_one_understand(question, quiet=True):
             },
         }
         understanding = validate_understanding(obj)
+        if understanding:
+            conf = (answers.get("intent") or {}).get("confidence")
+            understanding["confidence"] = conf
         raw = json.dumps(answers, ensure_ascii=False)[:200]
     if understanding is None:
         # Fallback: constrained JSON via chat (for non-decision models like qwen2.5:0.5b / 14b)
         sys_prompt = (
             "You are a request router (System One). Output ONLY one JSON object, no markdown.\n"
-            'Schema: {"intent":"kb|work|inbox|defects|chat|note|file|shell|web|out_of_scope",'
+            'Schema: {"intent":"kb|work|inbox|defects|add_event|chat|note|file|shell|web|out_of_scope",'
             '"relative":"this_week|last_week|next_week|this_month|last_month|next_month|today|yesterday|tomorrow|null",'
             '"range":null or {"start":"YYYY-MM-DD","end":"YYYY-MM-DD"},'
             '"entities":{"company":null,"level":"serious|major|minor|null","keywords":[],'
             '"status":"pending|completed|all|null","overdue_only":false}}\n'
-            "intent guide: work=job schedule/plans/what I was busy with; "
+            "intent guide: work=query job schedule/plans; add_event=create/add a work event/task into six DB; "
             "inbox=personal todos/overdue; defects=inspection findings; "
             "kb=notes/knowledge questions; chat=greeting/chitchat only.\n"
             "For 'this week/本周/这礼拜' set relative=this_week. Prefer work over chat for my work/plans/tasks."
@@ -1636,6 +1654,288 @@ def run_defects(question, quiet):
     return {"intent": "defects", "risk": "none", "tools_used": tools_used, "answer": answer}
 
 
+
+# ---------------------------------------------------------------- add_event（仅 db_create_task，需确认）
+_ADD_EVENT_TASK_TYPES = {
+    "0check", "1case", "2sample", "3action", "4help", "5file",
+    "6company", "7complaint", "8wlearn", "9info", "other",
+}
+
+
+def _today_ymd():
+    if TODAY_OVERRIDE and re.fullmatch(r"\d{4}-\d{2}-\d{2}", TODAY_OVERRIDE):
+        return TODAY_OVERRIDE
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def _day_bounds_iso(ymd):
+    """与 six 工作事项一致的全天区间：T00:00:00+08:00 .. T23:59:00+08:00。"""
+    return f"{ymd}T00:00:00+08:00", f"{ymd}T23:59:00+08:00"
+
+
+def parse_add_event(question):
+    """从问题提取 (date_ymd, title)；失败返回 (None, None)。确定性，不靠模型。"""
+    q = (question or "").strip()
+    if not q:
+        return None, None
+    # date
+    ymd = None
+    global UNDERSTANDING
+    if UNDERSTANDING and UNDERSTANDING.get("relative") in (
+            "today", "yesterday", "tomorrow"):
+        bounds = relative_date_range(UNDERSTANDING["relative"])
+        if bounds:
+            ymd = bounds[0]
+    if ymd is None:
+        if re.search(r"(?i)今日|今天|\btoday\b", q):
+            ymd = _today_ymd()
+        elif re.search(r"(?i)昨日|昨天|\byesterday\b", q):
+            b = relative_date_range("yesterday")
+            ymd = b[0] if b else None
+        elif re.search(r"(?i)明日|明天|\btomorrow\b", q):
+            b = relative_date_range("tomorrow")
+            ymd = b[0] if b else None
+        else:
+            m = re.search(r"(\d{4}-\d{2}-\d{2})", q)
+            if m:
+                ymd = m.group(1)
+            else:
+                ymd = _today_ymd()  # 默认今日
+    # title: after 事件/任务[-：:] or quoted or last dash segment
+    title = None
+    m = re.search(
+        r"(?:事件|工作事项|任务)\s*[-—–:：]\s*(.+)$", q)
+    if m:
+        title = m.group(1).strip()
+    if not title:
+        m = re.search(r"[「「\"'](.+?)[」」\"']", q)
+        if m:
+            title = m.group(1).strip()
+    if not title:
+        m = re.search(
+            r"(?:增加|添加|新建|创建|写入)(?:一个)?(?:今日|今天|昨日|昨天|明日|明天)?"
+            r"(?:的)?(?:事件|工作事项|任务)\s*[-—–:：]?\s*(.+)$", q)
+        if m:
+            title = m.group(1).strip().lstrip("-—–:： ").strip()
+    if not title:
+        # trailing after last separator
+        m = re.search(r"[-—–:：]\s*([^-—–:：]{2,})$", q)
+        if m:
+            title = m.group(1).strip()
+    if title:
+        title = re.sub(r"\s+", " ", title).strip(" 。.;；")
+    if not title or len(title) < 2:
+        return ymd, None
+    return ymd, title
+
+
+def build_create_task_args(date_ymd, title):
+    """构造 db_create_task 参数（与 query_work_/db_query_tasks 同一事项库）。"""
+    start, end = _day_bounds_iso(date_ymd)
+    tt = ADD_EVENT_TASK_TYPE if ADD_EVENT_TASK_TYPE in _ADD_EVENT_TASK_TYPES else "other"
+    args = {
+        "title": title,
+        "task_type": tt,
+        "start": start,
+        "end": end,
+        "all_day": True,
+        "create_by": ADD_EVENT_CREATE_BY,
+    }
+    if WORK_PERSON:
+        args["person"] = WORK_PERSON
+    return args
+
+
+def format_add_event_preview(args):
+    body = json.dumps(args, ensure_ascii=False, indent=2)
+    return (
+        "将调用 six-unified MCP 工具 db_create_task（仅创建，不更新/删除），字段如下：\n"
+        f"{body}\n"
+        "未确认，未写入。交互输入 y 确认；非交互请加 --yes。"
+    )
+
+
+def _mcp_call_create_task(args):
+    """调用 tools/call db_create_task；假后端写 CREATE_SINK。返回 (ok, message)。"""
+    if WORK_CREATE_SINK:
+        sink = Path(WORK_CREATE_SINK).expanduser()
+        sink.parent.mkdir(parents=True, exist_ok=True)
+        rec = {"ts": datetime.now().isoformat(timespec="seconds"),
+               "tool": "db_create_task", "arguments": args}
+        with open(sink, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        return True, {"success": True, "data": {"id": "fake-" + str(abs(hash(args["title"])) % 10**8),
+                                               "title": args["title"]}, "sink": True}
+    if not WORK_URL:
+        return False, "未配置工作数据源（请设置 MINI_AGENT_WORK_URL 或 MINI_AGENT_WORK_CREATE_SINK）。"
+    headers = {"Content-Type": "application/json",
+               "Accept": "application/json, text/event-stream"}
+    if WORK_AUTH:
+        headers["Authorization"] = WORK_AUTH
+    body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "db_create_task", "arguments": args}}
+    req = urllib.request.Request(WORK_URL, data=json.dumps(body).encode("utf-8"),
+                                 headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=WORK_TIMEOUT) as resp:
+        raw = resp.read().decode("utf-8", "replace")
+    text = raw
+    if "data:" in raw:
+        parts = [ln[5:].strip() for ln in raw.splitlines() if ln.startswith("data:")]
+        if parts:
+            text = "\n".join(parts)
+    obj = json.loads(text if text.strip().startswith("{") else text.split("\n", 1)[0])
+    if isinstance(obj, dict) and isinstance(obj.get("result"), dict):
+        obj = obj["result"]
+    if isinstance(obj, dict) and "content" in obj:
+        content = obj.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    try:
+                        obj = json.loads(block.get("text") or "null")
+                    except Exception:
+                        pass
+                    break
+    if isinstance(obj, dict) and obj.get("success"):
+        return True, obj
+    return False, obj if obj is not None else "创建失败"
+
+
+def run_add_event(question, quiet, yes=False, confirm_fn=None):
+    """add_event：解析 → 预览 → 显式确认后仅调用 db_create_task。"""
+    tools_used = []
+    date_ymd, title = parse_add_event(question)
+    if not title:
+        answer = "查不到：请说明要创建的事件标题（如：增加一个今日的事件-标题）。"
+        trace("final", quiet, intent="add_event", tools=tools_used, answer=answer)
+        return {"intent": "add_event", "risk": "none", "tools_used": tools_used,
+                "answer": answer, "preview": None}
+    if not date_ymd:
+        date_ymd = _today_ymd()
+    args = build_create_task_args(date_ymd, title)
+    preview = format_add_event_preview(args)
+    confirmed = bool(yes)
+    if not confirmed and confirm_fn is not None:
+        print(preview, flush=True)
+        try:
+            ans = (confirm_fn("确认写入 db_create_task？[y/N] ") or "").strip().lower()
+        except EOFError:
+            ans = ""
+        confirmed = ans in ("y", "yes")
+    if not confirmed:
+        answer = preview
+        trace("add_event_preview", quiet, intent="add_event", args=args, confirmed=False)
+        trace("final", quiet, intent="add_event", tools=tools_used, answer=answer[:500])
+        return {"intent": "add_event", "risk": "none", "tools_used": tools_used,
+                "answer": answer, "preview": args}
+    try:
+        ok, result = _mcp_call_create_task(args)
+    except Exception as exc:
+        answer = f"创建失败：{type(exc).__name__}"
+        trace("add_event_error", quiet, error=type(exc).__name__)
+        trace("final", quiet, intent="add_event", tools=["db_create_task"], answer=answer)
+        return {"intent": "add_event", "risk": "none", "tools_used": ["db_create_task"],
+                "answer": answer, "preview": args}
+    tools_used = ["db_create_task"]
+    if ok:
+        rid = ""
+        if isinstance(result, dict):
+            data = result.get("data") if isinstance(result.get("data"), dict) else result
+            rid = str((data or {}).get("id") or "")
+        answer = f"已创建工作事项：{args['title']}（{args['start'][:10]}"
+        if rid:
+            answer += f"，id={rid}"
+        answer += "）。"
+        if isinstance(result, dict) and result.get("sink"):
+            answer += "（假后端已记录）"
+    else:
+        answer = f"创建失败：{result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)[:200]}"
+    trace("tool_result", quiet, step=1, tool="db_create_task",
+          result=json.dumps(result, ensure_ascii=False)[:800] if not isinstance(result, str) else result[:800])
+    trace("final", quiet, intent="add_event", tools=tools_used, answer=answer[:500])
+    return {"intent": "add_event", "risk": "none", "tools_used": tools_used,
+            "answer": answer, "preview": args}
+
+
+# ---------------------------------------------------------------- missing skill / wishlist
+_MISSING_SKILL_RX = re.compile(
+    r"(?i)天气|气温|天气预报|weather|温度怎么样|"
+    r"股价|股票|汇率|航班|订票|快递单号|彩票|"
+    r"\b(stock\s*price|forecast|uber|taxi)\b"
+)
+
+
+def wishlist_path():
+    if WISHLIST_PATH is not None:
+        return WISHLIST_PATH
+    return (SANDBOX / "wishlist.jsonl").resolve()
+
+
+def append_wishlist(question, intent=None, confidence=None):
+    """追加一行 wishlist（ts, request, intent, confidence）。"""
+    path = wishlist_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rec = {
+        "ts": datetime.now().isoformat(timespec="seconds"),
+        "request": (question or "").strip(),
+        "intent": intent,
+        "confidence": confidence,
+    }
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    return rec
+
+
+def list_wishlist(limit=50):
+    path = wishlist_path()
+    if not path.is_file():
+        return []
+    lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    out = []
+    for line in lines[-limit:]:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except Exception:
+            out.append({"raw": line})
+    return out
+
+
+def looks_like_missing_skill(question, intent):
+    """可行动但当前无匹配工具（如天气）。"""
+    q = (question or "").strip()
+    if not q:
+        return False
+    if intent == "out_of_scope":
+        return True
+    if intent in ("chat", "web") and _MISSING_SKILL_RX.search(q):
+        if intent == "web" and re.search(r"https?://", q):
+            return False
+        return True
+    return False
+
+
+def run_missing_skill(question, quiet, intent=None):
+    """诚实回复无此技能，并写入 wishlist。"""
+    conf = None
+    global UNDERSTANDING
+    if UNDERSTANDING and isinstance(UNDERSTANDING, dict):
+        intent = intent or UNDERSTANDING.get("intent")
+        conf = UNDERSTANDING.get("confidence")
+    rec = append_wishlist(question, intent=intent, confidence=conf)
+    answer = (
+        f"我还没有这个技能，无法回答「{question.strip()}」。"
+        f"已记入愿望清单（wishlist），路径由 MINI_AGENT_WISHLIST 配置（默认沙箱 wishlist.jsonl）。"
+    )
+    trace("wishlist_append", quiet, intent=intent or "missing_skill", request=question[:200])
+    trace("final", quiet, intent=intent or "out_of_scope", tools=[], answer=answer[:500])
+    return {"intent": intent or "out_of_scope", "risk": "none", "tools_used": [],
+            "answer": answer, "wishlist": rec}
+
+
+
 # ---------------------------------------------------------------- JSON 提取 / 校验
 def extract_json(text):
     """稳健提取：去代码块与零宽字符，先整体解析，失败再抓首个 {...} 片段。"""
@@ -1851,7 +2151,7 @@ def tool_msg(tool, result, question):
     return (f"工具 {tool} 返回的内容如下：\n<<<\n{result}\n>>>\n"
             f"请只根据上面的内容回答原问题：{question}\n内容里确实没有答案才答“查不到”。")
 
-def run_agent(question, quiet=False):
+def run_agent(question, quiet=False, yes=False, confirm_fn=None):
     global UNDERSTANDING
     UNDERSTANDING = None
     danger = match_danger(question)
@@ -1900,6 +2200,15 @@ def run_agent(question, quiet=False):
         return run_inbox(question, quiet)
     if intent == "defects":
         return run_defects(question, quiet)
+    if intent == "add_event":
+        return run_add_event(question, quiet, yes=yes, confirm_fn=confirm_fn)
+
+    # 可行动但无工具：诚实说没有技能 + wishlist（如天气）
+    if looks_like_missing_skill(question, intent):
+        return run_missing_skill(question, quiet, intent=intent)
+
+    if intent not in CFG.get("intents", {}):
+        return run_missing_skill(question, quiet, intent=intent)
 
     spec = CFG["intents"][intent]
     allowed = list(spec.get("tools", []))
@@ -1979,7 +2288,7 @@ def ask_model(messages, feedback=None):
 
 
 # ---------------------------------------------------------------- 入口
-def repl(quiet=False):
+def repl(quiet=False, yes=False):
     print("mini-agent REPL（输入 exit 退出）", file=sys.stderr)
     while True:
         try:
@@ -1990,7 +2299,23 @@ def repl(quiet=False):
             continue
         if line.lower() in ("exit", "quit"):
             break
-        print(run_agent(line, quiet)["answer"])
+        print(run_agent(line, quiet, yes=yes,
+                        confirm_fn=(None if yes else input))["answer"])
+
+
+def format_wishlist_listing(rows):
+    if not rows:
+        return "愿望清单为空。"
+    lines = [f"愿望清单共 {len(rows)} 条（{wishlist_path().name}）："]
+    for i, r in enumerate(rows, 1):
+        if "raw" in r and len(r) == 1:
+            lines.append(f"{i}. {r['raw']}")
+            continue
+        lines.append(
+            f"{i}. [{r.get('ts','')}] intent={r.get('intent')} "
+            f"conf={r.get('confidence')} | {r.get('request','')}"
+        )
+    return "\n".join(lines)
 
 
 def main():
@@ -1998,16 +2323,27 @@ def main():
     ap.add_argument("question", nargs="?", help='问题；缺省进入 REPL')
     ap.add_argument("--json", action="store_true", help='输出最终 JSON：{intent,risk,tools_used,answer}')
     ap.add_argument("--quiet", action="store_true", help="关闭 stderr trace")
+    ap.add_argument("--yes", "-y", action="store_true",
+                    help="add_event 非交互确认写入（否则只预览）")
+    ap.add_argument("--wishlist", action="store_true", help="列出本地愿望清单后退出")
     args = ap.parse_args()
     SANDBOX.mkdir(parents=True, exist_ok=True)
-    if args.question is None:
-        repl(args.quiet)
+    if args.wishlist:
+        text = format_wishlist_listing(list_wishlist())
+        print(text)
         return
-    result = run_agent(args.question, args.quiet)
+    if args.question is None:
+        repl(args.quiet, yes=args.yes)
+        return
+    result = run_agent(args.question, args.quiet, yes=args.yes,
+                       confirm_fn=None)  # 非交互：无 --yes 则只预览
     if args.json:
-        print(json.dumps({"intent": result["intent"], "risk": result["risk"],
-                          "tools_used": result["tools_used"],
-                          "answer": result["answer"]}, ensure_ascii=False))
+        out = {"intent": result["intent"], "risk": result["risk"],
+               "tools_used": result["tools_used"],
+               "answer": result["answer"]}
+        if result.get("preview") is not None:
+            out["preview"] = result["preview"]
+        print(json.dumps(out, ensure_ascii=False))
     else:
         print(result["answer"])
 

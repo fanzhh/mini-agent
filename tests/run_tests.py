@@ -86,6 +86,13 @@ CASES = [
      and not any(x in a for x in ("没有权限", "无法访问", "no access", "don't have access", "do not have access"))),
     ("w", "本周工作计划",
      lambda d, a: d.get("intent") == "work" and "work_summary" in d.get("tools_used", [])),
+    ("x", "向six数据库中增加一个今日的事件-印发中药饮片集采生产企业定期报告制度",
+     lambda d, a: d.get("intent") == "add_event"
+     and "db_create_task" in a
+     and "印发中药饮片集采生产企业定期报告制度" in a
+     and d.get("tools_used") == []),  # no --yes => preview only
+    ("y", "今天天气怎么样",
+     lambda d, a: "没有这个技能" in a or "愿望" in a),
 ]
 
 
@@ -229,6 +236,52 @@ def run_unit_tests():
     mini_agent.chat_completion = real_chat
     check("u28_hc_present",
           mini_agent.high_confidence_rule("tell me about my work plans this week") is not None)
+    # add_event parse + preview (no write without yes)
+    os.environ["MINI_AGENT_TODAY"] = "2026-10-12"
+    importlib.reload(mini_agent)
+    d, title = mini_agent.parse_add_event(
+        "向six数据库中增加一个今日的事件-印发中药饮片集采生产企业定期报告制度")
+    check("u29_parse_add_event",
+          d == "2026-10-12" and title == "印发中药饮片集采生产企业定期报告制度",
+          f"{d}|{title}")
+    check("u30_hc_add_event",
+          (mini_agent.high_confidence_rule(
+              "向six数据库中增加一个今日的事件-测试标题") or [None])[0] == "add_event")
+    args = mini_agent.build_create_task_args("2026-10-12", "测试标题")
+    check("u31_create_args",
+          args["title"] == "测试标题" and args["all_day"] is True
+          and args["start"].startswith("2026-10-12T") and args["task_type"] == "other",
+          str(args))
+    sink = Path(tempfile.mkdtemp(prefix="create_sink_")) / "sink.jsonl"
+    os.environ["MINI_AGENT_WORK_CREATE_SINK"] = str(sink)
+    os.environ["MINI_AGENT_WORK_URL"] = ""
+    importlib.reload(mini_agent)
+    r_prev = mini_agent.run_add_event(
+        "增加一个今日的事件-单元测试事项A", quiet=True, yes=False)
+    check("u32_preview_no_write",
+          r_prev["intent"] == "add_event" and not r_prev["tools_used"]
+          and r_prev.get("preview") and "db_create_task" in r_prev["answer"]
+          and (not sink.exists() or sink.read_text().strip() == ""),
+          r_prev["answer"][:60])
+    r_yes = mini_agent.run_add_event(
+        "增加一个今日的事件-单元测试事项B", quiet=True, yes=True)
+    check("u33_yes_writes_sink",
+          r_yes["tools_used"] == ["db_create_task"] and sink.is_file()
+          and "单元测试事项B" in sink.read_text(encoding="utf-8"),
+          r_yes["answer"][:80])
+    # wishlist / missing skill
+    wish = Path(tempfile.mkdtemp(prefix="wish_")) / "wishlist.jsonl"
+    os.environ["MINI_AGENT_WISHLIST"] = str(wish)
+    importlib.reload(mini_agent)
+    check("u34_missing_skill_detect",
+          mini_agent.looks_like_missing_skill("今天天气怎么样", "chat") is True)
+    wr = mini_agent.run_missing_skill("今天天气怎么样", quiet=True, intent="chat")
+    check("u35_wishlist_append",
+          wish.is_file() and "天气" in wish.read_text(encoding="utf-8")
+          and "没有这个技能" in wr["answer"],
+          wr["answer"][:60])
+    listed = mini_agent.list_wishlist()
+    check("u36_wishlist_list", len(listed) >= 1 and "天气" in listed[-1].get("request", ""))
     return rows
 
 

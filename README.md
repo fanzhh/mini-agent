@@ -28,6 +28,9 @@
 - `MINI_AGENT_S1_ENDPOINT` — optional System One URL (default `{BASE_URL}/systemone`). `tev1:0.8b` uses Ollama decision API; chat JSON is fallback for non-decision models.
 | `MINI_AGENT_INTENT_TIMEOUT` | `8` | System One 超时秒数 |
 | `MINI_AGENT_TODAY` | 空 | 固定今天 YYYY-MM-DD（测相对日期） |
+| `MINI_AGENT_WORK_PERSON` | 空 | add_event 可选负责人 |
+| `MINI_AGENT_WORK_CREATE_SINK` | 空 | add_event 假后端 JSONL（测试） |
+| `MINI_AGENT_WISHLIST` | 沙箱 `wishlist.jsonl` | 缺失技能愿望清单 |
 
 行为参数在 `config.json`：意图关键词/正则、危险词、shell 白名单、`max_steps`、`max_tokens`。
 
