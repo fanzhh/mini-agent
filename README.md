@@ -25,6 +25,7 @@
 | `MINI_AGENT_DEFECTS_URL` / `AUTH` | 空 | 可选覆盖；默认复用 WORK_URL/AUTH |
 | `MINI_AGENT_ROUTER_MODE` | `hybrid` | `hybrid`/`rule`/`systemone` |
 | `MINI_AGENT_S1_MODEL` | `tev1:0.8b` | System One 理解小模型（答题仍用 MINI_AGENT_MODEL） |
+- `MINI_AGENT_S1_ENDPOINT` — optional System One URL (default `{BASE_URL}/systemone`). `tev1:0.8b` uses Ollama decision API; chat JSON is fallback for non-decision models.
 | `MINI_AGENT_INTENT_TIMEOUT` | `8` | System One 超时秒数 |
 | `MINI_AGENT_TODAY` | 空 | 固定今天 YYYY-MM-DD（测相对日期） |
 

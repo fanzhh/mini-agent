@@ -60,6 +60,13 @@ WORK_TIMEOUT = float(os.environ.get("MINI_AGENT_WORK_TIMEOUT", "30"))
 ROUTER_MODE = os.environ.get("MINI_AGENT_ROUTER_MODE", "hybrid").strip().lower() or "hybrid"
 S1_MODEL = os.environ.get("MINI_AGENT_S1_MODEL", "tev1:0.8b").strip() or "tev1:0.8b"
 S1_TIMEOUT = float(os.environ.get("MINI_AGENT_INTENT_TIMEOUT", "8"))
+# Decision API (/v1/systemone). Default = same host as BASE_URL.
+_s1_ep = os.environ.get("MINI_AGENT_S1_ENDPOINT", "").strip()
+if _s1_ep:
+    S1_ENDPOINT = _s1_ep.rstrip("/")
+else:
+    # BASE_URL like http://host:11434/v1 -> http://host:11434/v1/systemone
+    S1_ENDPOINT = (BASE_URL.rstrip("/") + "/systemone") if BASE_URL else ""
 TODAY_OVERRIDE = os.environ.get("MINI_AGENT_TODAY", "").strip()  # YYYY-MM-DD 测相对日期
 # System One 解析结果提示（供 run_work/inbox/defects 使用）
 UNDERSTANDING = None  # dict | None
@@ -656,35 +663,138 @@ def validate_understanding(obj):
     }
 
 
-def system_one_understand(question, quiet=True):
-    """System One 主理解：用 S1_MODEL 输出受限 JSON。返回 (understanding|None, duration_ms)。"""
-    t0 = time.time()
-    sys_prompt = (
-        "You are a request router (System One). Output ONLY one JSON object, no markdown.\n"
-        'Schema: {"intent":"kb|work|inbox|defects|chat|note|file|shell|web|out_of_scope",'
-        '"relative":"this_week|last_week|next_week|this_month|last_month|next_month|today|yesterday|tomorrow|null",'
-        '"range":null or {"start":"YYYY-MM-DD","end":"YYYY-MM-DD"},'
-        '"entities":{"company":null,"level":"serious|major|minor|null","keywords":[],'
-        '"status":"pending|completed|all|null","overdue_only":false}}\n'
-        "intent guide: work=job schedule/plans/what I was busy with; "
-        "inbox=personal todos/overdue; defects=inspection findings; "
-        "kb=notes/knowledge questions; chat=greeting/chitchat only.\n"
-        "For 'this week/本周/这礼拜' set relative=this_week. Prefer work over chat for my work/plans/tasks."
+def call_systemone(state, questions, model=None, timeout=None):
+    """POST Ollama/Laya /v1/systemone (decision API). Returns answers dict or None."""
+    if not S1_ENDPOINT:
+        return None
+    body = {
+        "model": (model or S1_MODEL),
+        "state": state,
+        "questions": questions,
+    }
+    req = urllib.request.Request(
+        S1_ENDPOINT,
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
     )
-    content = chat_completion(
-        [{"role": "system", "content": sys_prompt},
-         {"role": "user", "content": question}],
-        json_mode=True, max_tokens=96, timeout=S1_TIMEOUT, model=S1_MODEL)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout if timeout is not None else S1_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8", "ignore"))
+        return data.get("answers") if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+S1_QUESTIONS = {
+    "intent": {
+        "type": "choice",
+        "instructions": "Which intent best matches the user request?",
+        "criteria": {
+            "work": "Job schedule, work plans, what I was busy with at work",
+            "inbox": "Personal todos, overdue tasks, inbox items",
+            "defects": "Inspection findings / defect records search",
+            "kb": "Notes or knowledge-base questions",
+            "chat": "Greeting or chitchat only",
+            "note": "User wants to record a short note",
+            "file": "Read or list local files",
+            "shell": "Run a shell command",
+            "web": "Look something up on the web",
+            "out_of_scope": "Request outside supported capabilities",
+        },
+    },
+    "relative": {
+        "type": "choice",
+        "instructions": "Which relative date range does the request refer to?",
+        "criteria": {
+            "this_week": "This calendar week / this week / 本周 / 这周 / 这礼拜",
+            "last_week": "Last week / 上周",
+            "next_week": "Next week / 下周",
+            "this_month": "This month / 本月",
+            "last_month": "Last month / 上月",
+            "next_month": "Next month / 下月",
+            "today": "Today / 今天",
+            "yesterday": "Yesterday / 昨天",
+            "tomorrow": "Tomorrow / 明天",
+            "none": "No relative date mentioned",
+        },
+    },
+    "overdue_only": {
+        "type": "noul",
+        "instructions": "Does the user ask specifically for overdue items?",
+        "criteria": {"true": "Asks for overdue", "false": "Does not"},
+    },
+    "level": {
+        "type": "choice",
+        "instructions": "If asking about defects/findings, which severity level?",
+        "criteria": {
+            "serious": "Serious / 严重",
+            "major": "Major / 主要",
+            "minor": "Minor / 一般",
+            "none": "Not about defect severity / not a defects query",
+        },
+    },
+}
+
+
+def system_one_understand(question, quiet=True):
+    """System One 主理解：优先 tev1 /v1/systemone；失败则 chat JSON 回退。返回 (understanding|None, duration_ms)。"""
+    t0 = time.time()
+    answers = call_systemone(question, S1_QUESTIONS, model=S1_MODEL, timeout=S1_TIMEOUT)
+    understanding = None
+    raw = None
+    if isinstance(answers, dict) and answers.get("intent"):
+        intent = (answers.get("intent") or {}).get("choice")
+        rel = (answers.get("relative") or {}).get("choice")
+        if rel in (None, "none", "null", ""):
+            rel = None
+        overdue_p = (answers.get("overdue_only") or {}).get("noul")
+        overdue = bool(isinstance(overdue_p, (int, float)) and overdue_p >= 0.5)
+        level = (answers.get("level") or {}).get("choice")
+        if level in (None, "none", "null", ""):
+            level = None
+        obj = {
+            "intent": intent,
+            "relative": rel,
+            "range": None,
+            "entities": {
+                "company": None,
+                "level": level,
+                "keywords": [],
+                "status": None,
+                "overdue_only": overdue,
+            },
+        }
+        understanding = validate_understanding(obj)
+        raw = json.dumps(answers, ensure_ascii=False)[:200]
+    if understanding is None:
+        # Fallback: constrained JSON via chat (for non-decision models like qwen2.5:0.5b / 14b)
+        sys_prompt = (
+            "You are a request router (System One). Output ONLY one JSON object, no markdown.\n"
+            'Schema: {"intent":"kb|work|inbox|defects|chat|note|file|shell|web|out_of_scope",'
+            '"relative":"this_week|last_week|next_week|this_month|last_month|next_month|today|yesterday|tomorrow|null",'
+            '"range":null or {"start":"YYYY-MM-DD","end":"YYYY-MM-DD"},'
+            '"entities":{"company":null,"level":"serious|major|minor|null","keywords":[],'
+            '"status":"pending|completed|all|null","overdue_only":false}}\n'
+            "intent guide: work=job schedule/plans/what I was busy with; "
+            "inbox=personal todos/overdue; defects=inspection findings; "
+            "kb=notes/knowledge questions; chat=greeting/chitchat only.\n"
+            "For 'this week/本周/这礼拜' set relative=this_week. Prefer work over chat for my work/plans/tasks."
+        )
+        content = chat_completion(
+            [{"role": "system", "content": sys_prompt},
+             {"role": "user", "content": question}],
+            json_mode=True, max_tokens=96, timeout=S1_TIMEOUT, model=S1_MODEL)
+        raw = (content or "")[:200]
+        obj = extract_json(content) if content else None
+        understanding = validate_understanding(obj) if obj else None
     ms = int((time.time() - t0) * 1000)
-    obj = extract_json(content) if content else None
-    understanding = validate_understanding(obj) if obj else None
     if understanding:
         trace("intent_systemone", quiet, intent=understanding["intent"],
               relative=understanding.get("relative"), range=understanding.get("range"),
               entities=understanding.get("entities"), duration_ms=ms, model=S1_MODEL)
     else:
-        trace("intent_systemone_fail", quiet, duration_ms=ms, model=S1_MODEL,
-              raw=(content or "")[:200])
+        trace("intent_systemone_fail", quiet, duration_ms=ms, model=S1_MODEL, raw=raw)
     return understanding, ms
 
 

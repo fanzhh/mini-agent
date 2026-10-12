@@ -207,18 +207,26 @@ def run_unit_tests():
           mini_agent.classify_rules("tell me about my work plans this week") == "work")
     check("u25_classify_benzhou",
           mini_agent.classify_rules("本周工作计划") == "work")
-    def fake_s1_ok(messages, json_mode=True, max_tokens=None, timeout=None, model=None, **kwargs):
-        return '{"intent":"work","relative":"this_week","range":null,"entities":{"company":null,"level":null,"keywords":[],"status":null,"overdue_only":false}}'
-    def fake_s1_bad(messages, json_mode=True, max_tokens=None, timeout=None, model=None, **kwargs):
-        return "not-json{{"
-    real = mini_agent.chat_completion
-    mini_agent.chat_completion = fake_s1_ok
+    def fake_s1_ok(state, questions, model=None, timeout=None):
+        return {
+            "intent": {"type": "choice", "choice": "work", "confidence": 0.99},
+            "relative": {"type": "choice", "choice": "this_week", "confidence": 0.98},
+            "overdue_only": {"type": "noul", "noul": 0.01},
+            "level": {"type": "choice", "choice": "none", "confidence": 0.9},
+        }
+    def fake_s1_bad(state, questions, model=None, timeout=None):
+        return None
+    real_s1 = mini_agent.call_systemone
+    real_chat = mini_agent.chat_completion
+    mini_agent.call_systemone = fake_s1_ok
+    mini_agent.chat_completion = lambda *a, **k: None  # no chat fallback in mock
     u, ms = mini_agent.system_one_understand("what kept me occupied recently during the current week", quiet=True)
     check("u26_s1_mock_work", bool(u and u["intent"] == "work" and u["range"]["start"] == "2026-10-12"), str(u)[:80])
-    mini_agent.chat_completion = fake_s1_bad
+    mini_agent.call_systemone = fake_s1_bad
     u2, _ = mini_agent.system_one_understand("gibberish xyz", quiet=True)
     check("u27_s1_bad_json", u2 is None)
-    mini_agent.chat_completion = real
+    mini_agent.call_systemone = real_s1
+    mini_agent.chat_completion = real_chat
     check("u28_hc_present",
           mini_agent.high_confidence_rule("tell me about my work plans this week") is not None)
     return rows
