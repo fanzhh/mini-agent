@@ -92,6 +92,25 @@
       ],
       "system": "你是知识库问答助手。只根据 kb_search/kb_read 返回的摘录回答，注明文件路径；摘录中没有依据就答“查不到”，不要编造。"
     },
+    "inbox": {
+      "keywords": [
+        "收件箱",
+        "inbox",
+        "待办",
+        "超期",
+        "逾期",
+        "未完成事项",
+        "Inbox"
+      ],
+      "regex": [
+        "(?i)(收件箱|inbox|待办|超期|逾期|未完成事项)",
+        "(?i)\\binbox\\b"
+      ],
+      "tools": [
+        "inbox_query"
+      ],
+      "system": "你是 Inbox 待办助手。只根据 inbox_query 返回的摘要用简洁中文复述；不要编造未出现的事项；totalFound=0 则答查不到；说明超期口径（未完成且排期早于今天）。"
+    },
     "work": {
       "keywords": [
         "工作事项",

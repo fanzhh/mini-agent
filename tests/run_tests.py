@@ -18,6 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 INFO_CONTENT = "项目代号：青松，预算 37 万元"
 WORK_FIXTURE = ROOT / "tests" / "fixtures" / "work_tasks.json"
+INBOX_FIXTURE = ROOT / "tests" / "fixtures" / "inbox.md"
 
 KB_FARM = "01_AREAS/work/2026-10-01-blueberry-farm.md"
 KB_FARM_CONTENT = "# 蓝莓基地报告\n蓝莓基地今年亩产 820 公斤，负责人老周。"
@@ -57,6 +58,18 @@ CASES = [
      lambda d, a: d.get("intent") == "work" and ("1" in a) and ("查不到" not in a or "八月" in a or "示例" in a)),
     ("l", "查询2099年1月的工作事项",
      lambda d, a: d.get("intent") == "work" and "查不到" in a),
+    ("n", "收件箱里有哪些超期待办",
+     lambda d, a: d.get("intent") == "inbox"
+     and "inbox_query" in d.get("tools_used", [])
+     and ("Rust" in a or "超期" in a or "学习" in a or "GMP" in a)
+     and "查不到" not in a),
+    ("o", "Inbox 未完成事项",
+     lambda d, a: d.get("intent") == "inbox"
+     and "inbox_query" in d.get("tools_used", [])
+     and "已完成周报" not in a
+     and ("未完成" in a or "pending" in a or "待办" in a or "示例" in a or "学习" in a or "买火车" in a)),
+    ("p", "收件箱里关于火星殖民计划xyz的待办",
+     lambda d, a: d.get("intent") == "inbox" and "查不到" in a),
 ]
 
 
@@ -65,6 +78,8 @@ def run_case(sandbox, kb_dir, question, extra_env=None):
     env["MINI_AGENT_SANDBOX"] = str(sandbox)
     env["MINI_AGENT_KB"] = str(kb_dir)
     env["MINI_AGENT_WORK_FIXTURE"] = str(WORK_FIXTURE)
+    env["MINI_AGENT_INBOX"] = str(INBOX_FIXTURE)
+    env["MINI_AGENT_INBOX_TODAY"] = "2026-10-12"
     env.setdefault("MINI_AGENT_API_KEY", "")
     if extra_env:
         env.update(extra_env)
@@ -111,6 +126,17 @@ def run_unit_tests():
         check("u7_missing_id", False, "should raise")
     except ValueError:
         check("u7_missing_id", True)
+    os.environ["MINI_AGENT_INBOX"] = str(INBOX_FIXTURE)
+    os.environ["MINI_AGENT_INBOX_TODAY"] = "2026-10-12"
+    importlib.reload(mini_agent)
+    ip = mini_agent.resolve_inbox_path()
+    check("u8_inbox_resolve", ip is not None and ip.name == "inbox.md")
+    line = mini_agent.parse_inbox_line(
+        "- [ ] 示例任务 📅 2020-01-01 #work", 1, "2026-10-12")
+    check("u9_inbox_overdue", bool(line and line["isOverdue"] and line["isWork"]))
+    od = mini_agent.query_inbox_tasks(ip, {"overdue_only": True, "status": "pending", "today": "2026-10-12"})
+    check("u10_inbox_overdue_count", od["totalFound"] >= 2 and od["file"] == "inbox.md", str(od["totalFound"]))
+    check("u11_inbox_basename", "/" not in od["file"])
     return rows
 
 
@@ -149,6 +175,17 @@ def main():
         except Exception as exc:
             ok, detail = False, f"异常: {exc}"
         rows.append(("m", "work未配置数据源", ok, detail))
+        passed += ok
+        try:
+            empty_kb = Path(tempfile.mkdtemp(prefix="empty_kb_"))
+            data = run_case(sandbox, empty_kb, "收件箱里有哪些待办",
+                            extra_env={"MINI_AGENT_INBOX": ""})
+            ok = "未配置" in data.get("answer", "")
+            detail = data.get("answer", "").replace("\n", " ")[:60]
+            shutil.rmtree(empty_kb, ignore_errors=True)
+        except Exception as exc:
+            ok, detail = False, f"异常: {exc}"
+        rows.append(("q", "inbox未配置", ok, detail))
         passed += ok
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
