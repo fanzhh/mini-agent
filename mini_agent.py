@@ -1904,15 +1904,16 @@ def list_wishlist(limit=50):
 
 
 def looks_like_missing_skill(question, intent):
-    """可行动但当前无匹配工具（如天气）。"""
+    """可行动但当前无匹配工具（如天气）。天气等硬缺失技能优先于 kb 误命中。"""
     q = (question or "").strip()
     if not q:
         return False
-    if intent == "out_of_scope":
-        return True
-    if intent in ("chat", "web") and _MISSING_SKILL_RX.search(q):
+    # Hard missing skills: never fake via kb/chat/web
+    if _MISSING_SKILL_RX.search(q):
         if intent == "web" and re.search(r"https?://", q):
             return False
+        return True
+    if intent == "out_of_scope":
         return True
     return False
 
@@ -2192,6 +2193,10 @@ def run_agent(question, quiet=False, yes=False, confirm_fn=None):
                 intent = "chat"
                 trace("intent_chat_default", quiet, intent=intent, after_s1_ms=s1_ms)
 
+    # 可行动但无工具：诚实说没有技能 + wishlist（如天气；优先于 kb 误命中）
+    if looks_like_missing_skill(question, intent):
+        return run_missing_skill(question, quiet, intent=intent)
+
     if intent == "kb":  # 确定性流程：模型不参与工具选择
         return run_kb(question, quiet)
     if intent == "work":
@@ -2202,10 +2207,6 @@ def run_agent(question, quiet=False, yes=False, confirm_fn=None):
         return run_defects(question, quiet)
     if intent == "add_event":
         return run_add_event(question, quiet, yes=yes, confirm_fn=confirm_fn)
-
-    # 可行动但无工具：诚实说没有技能 + wishlist（如天气）
-    if looks_like_missing_skill(question, intent):
-        return run_missing_skill(question, quiet, intent=intent)
 
     if intent not in CFG.get("intents", {}):
         return run_missing_skill(question, quiet, intent=intent)
