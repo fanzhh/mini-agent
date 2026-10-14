@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mini-agent"
+version = "0.1.0"
+description = "最小智能体：标准库实现的意图路由 + 工具调用 + 防胡说校验，经 OpenAI 兼容接口。"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "fanzhh", email = "fanzhh@gmail.com" }]
+keywords = ["agent", "llm", "tool-calling", "cli", "stdlib"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+# 纯标准库实现：无任何运行时第三方依赖。
+dependencies = []
+
+[project.scripts]
+mini-agent = "mini_agent.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/fanzhh/mini-agent"
+Issues = "https://github.com/fanzhh/mini-agent/issues"
+
+[tool.setuptools]
+packages = ["mini_agent"]
+
+[tool.setuptools.package-data]
+mini_agent = ["config.json"]

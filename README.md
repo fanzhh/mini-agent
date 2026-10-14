@@ -1,6 +1,22 @@
 # mini-agent
 
-最小智能体：单文件 `mini_agent.py`，仅 Python 标准库，经 OpenAI 兼容接口做工具调用。
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+最小智能体：仅 Python 标准库，经 OpenAI 兼容接口做工具调用。
+早期为单文件，现按职责拆分为 `mini_agent/` 多模块包（行为不变，回归测试 61/61）。
+
+## 安装
+
+```bash
+pip install .            # 或开发模式：pip install -e .
+mini-agent --help        # 安装后得到 mini-agent 命令
+```
+
+免安装直接跑（在项目根目录）：
+
+```bash
+python3 -m mini_agent --help
+```
 
 ## 配置
 
@@ -31,22 +47,42 @@
 | `MINI_AGENT_WORK_PERSON` | 空 | add_event 可选负责人 |
 | `MINI_AGENT_WORK_CREATE_SINK` | 空 | add_event 假后端 JSONL（测试） |
 | `MINI_AGENT_WISHLIST` | 沙箱 `wishlist.jsonl` | 缺失技能愿望清单 |
+| `MINI_AGENT_SEARXNG_URL` | `http://100.73.52.74:8088` | 网页搜索服务（HK VPS 上的 SearXNG，Tailscale 内网）；置空则关闭 `web_search` |
+| `MINI_AGENT_SEARXNG_TIMEOUT` | `12` | 搜索请求超时秒数 |
+| `MINI_AGENT_SEARXNG_MAX_RESULTS` | `6` | 喂给模型的最大结果条数（服务端已压缩为纯文本） |
+| `MINI_AGENT_CONFIG` | 随包 `config.json` | 可选覆盖行为配置文件路径 |
 
 行为参数在 `config.json`：意图关键词/正则、危险词、shell 白名单、`max_steps`、`max_tokens`。
 
 ## 用法
 
 ```bash
-python3 mini_agent.py "info.txt 里写的预算是多少"   # 问答
-python3 mini_agent.py --json "你好"                # 输出 {"intent":...,"risk":...,"tools_used":[...],"answer":...}
-python3 mini_agent.py --quiet "列出目录下的文件"    # 关闭 stderr trace
-python3 mini_agent.py                              # 无参数进入 REPL
+python3 -m mini_agent "info.txt 里写的预算是多少"   # 问答（安装后可直接 mini-agent ...）
+python3 -m mini_agent --json "你好"                 # 输出 {"intent":...,"risk":...,"tools_used":[...],"answer":...}
+python3 -m mini_agent --quiet "列出目录下的文件"     # 关闭 stderr trace
+python3 -m mini_agent                               # 无参数进入 REPL（↑↓ 翻历史）
 ```
+
+## 结构
+
+按职责拆分，依赖单向（下层不 import 上层）：
+
+```
+mini_agent/
+  config.py  state.py  trace.py  jsonutil.py       # 底层：配置 / 可变状态 / 事件流 / JSON 提取
+  model.py  router.py  tools.py                     # 中层：模型调用 / 意图路由 / 工具
+  knowledge.py work.py inbox.py defects.py events.py skills.py   # 能力模块（确定性流程）
+  agent.py                                          # 主编排（run_agent + run_web）
+  cli.py  __main__.py                               # 入口与 REPL
+  config.json                                       # 意图词表 / 危险词 / shell 白名单 / 步数预算
+```
+
+各模块职责与修改约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 流程
 
 1. **System 1 前置路由**：先查危险词（`rm`、`sudo`、`mkfs`、`dd`、`shutdown`、`curl|sh`、重定向 `>`、`chmod` 等），命中直接返回「已拦截：不可逆操作」；否则按 `config.json` 关键词/正则判意图（chat / file / shell 只读 / web / note / kb 知识库 / work 工作汇总 / inbox 待办 / defects 缺陷检索 / out_of_scope 拒答；`笔记里/我的笔记/知识库` 等 kb 关键词与 note 同分时优先归 kb，`记一下：…` 仍归 note）；规则不命中时，若设了 `MINI_AGENT_LAYA_URL` 则 POST `/predict`（失败忽略），再把提到「我/我的」的事实性问题兜底归 kb（需配置知识库），最后用一次极短模型分类（只输出类别名，不在白名单则 chat）。
-2. **工具循环**（最多 `max_steps` 步）：每个意图只暴露 1–3 个工具——`read_file`、`search_files`（限沙箱内，防 `..` 逃逸）、`run_shell`（白名单 `ls cat wc head date pwd echo grep`，`shlex` 解析，禁管道/重定向，`cwd=沙箱`）、`web_fetch`（截断 4000 字）、`note_append`（追加 `sandbox/notes.md`）。模型每步只输出 JSON `{"tool":..,"args":{..}}` 或 `{"answer":..,"sources":[..]}`；请求附 `response_format: json_object`（服务器报 4xx 则去掉重试）；JSON 提取去代码块并校验，失败带错误反馈重试 1 次。
+2. **工具循环**（最多 `max_steps` 步）：每个意图只暴露 1–3 个工具——`read_file`、`search_files`（限沙箱内，防 `..` 逃逸）、`run_shell`（白名单 `ls cat wc head date pwd echo grep`，`shlex` 解析，禁管道/重定向，`cwd=沙箱`）、`web_fetch`（截断 4000 字）、`web_search`（经 SearXNG，服务端压缩为纯文本）、`note_append`（追加 `sandbox/notes.md`）。模型每步只输出 JSON `{"tool":..,"args":{..}}` 或 `{"answer":..,"sources":[..]}`；请求附 `response_format: json_object`（服务器报 4xx 则去掉重试）；JSON 提取去代码块并校验，失败带错误反馈重试 1 次。
 3. **防胡说**：系统提示要求只依据工具结果回答，查不到答「不知道」；规则校验器——答案里的数字必须出现在工具结果或问题中，否则改为「查不到可靠信息」；非 chat 意图没有任何工具结果且答案不含「不知道/查不到」，则改为「查不到相关信息」。
 4. **降级**：模型接口不可用时按意图走规则兜底（直接读文件、执行白名单命令、追加笔记等），保证基本可用。
 5. **trace**：每一步打到 stderr（`--quiet` 关闭），并追加写入 `sandbox/trace.jsonl`。
@@ -110,4 +146,8 @@ wee "查询示例药业甲的严重缺陷"
 python3 tests/run_tests.py
 ```
 
-建临时 sandbox 放入 `info.txt`（含「项目代号：青松，预算 37 万元」）与临时知识库（蓝莓基地报告、pi agent 笔记、必须跳过的 `.obsidian/x.md`），子进程调 `mini_agent.py --json --quiet`，跑 9+work 例与纯函数单测打印 PASS/FAIL 表：预算查询、未知事实拒答、危险命令拦截、闲聊零工具、列目录、记笔记、知识库亩产查询（`820`/`blueberry`）、知识库无结果拒答、知识库负责人查询；工作事项 2026-09 汇总、区间汇总、空月拒答、未配置数据源提示；Inbox 超期/未完成/无匹配/未配置；缺陷严重级别检索/区间/无匹配/未配置。
+建临时 sandbox 放入 `info.txt`（含「项目代号：青松，预算 37 万元」）与临时知识库（蓝莓基地报告、pi agent 笔记、必须跳过的 `.obsidian/x.md`），子进程调 `python3 -m mini_agent --json --quiet`，跑 9+work 例与纯函数单测打印 PASS/FAIL 表：预算查询、未知事实拒答、危险命令拦截、闲聊零工具、列目录、记笔记、知识库亩产查询（`820`/`blueberry`）、知识库无结果拒答、知识库负责人查询；工作事项 2026-09 汇总、区间汇总、空月拒答、未配置数据源提示；Inbox 超期/未完成/无匹配/未配置；缺陷严重级别检索/区间/无匹配/未配置。
+
+## 许可
+
+本项目以 [MIT](LICENSE) 许可证开源。

@@ -110,7 +110,7 @@ def run_case(sandbox, kb_dir, question, extra_env=None):
     if extra_env:
         env.update(extra_env)
     proc = subprocess.run(
-        [sys.executable, str(ROOT / "mini_agent.py"), "--json", "--quiet", question],
+        [sys.executable, "-m", "mini_agent", "--json", "--quiet", question],
         capture_output=True, text=True, timeout=180, env=env, cwd=str(ROOT))
     try:
         data = json.loads(proc.stdout.strip())
@@ -128,7 +128,7 @@ def run_unit_tests():
     os.environ["MINI_AGENT_WORK_FIXTURE"] = str(WORK_FIXTURE)
     import importlib
     import mini_agent
-    importlib.reload(mini_agent)
+    importlib.reload(mini_agent.config); importlib.reload(mini_agent)
     rows = []
     def check(name, cond, detail=""):
         rows.append((name, cond, detail))
@@ -154,7 +154,7 @@ def run_unit_tests():
         check("u7_missing_id", True)
     os.environ["MINI_AGENT_INBOX"] = str(INBOX_FIXTURE)
     os.environ["MINI_AGENT_INBOX_TODAY"] = "2026-10-12"
-    importlib.reload(mini_agent)
+    importlib.reload(mini_agent.config); importlib.reload(mini_agent)
     ip = mini_agent.resolve_inbox_path()
     check("u8_inbox_resolve", ip is not None and ip.name == "inbox.md")
     line = mini_agent.parse_inbox_line(
@@ -165,7 +165,7 @@ def run_unit_tests():
     check("u11_inbox_basename", "/" not in od["file"])
     # defects 纯函数
     os.environ["MINI_AGENT_DEFECTS_FIXTURE"] = str(DEFECTS_FIXTURE)
-    importlib.reload(mini_agent)
+    importlib.reload(mini_agent.config); importlib.reload(mini_agent)
     check("u12_level_map",
           mini_agent.map_defects_level("严重缺陷") == "serious"
           and mini_agent.map_defects_level("主要缺陷") == "major"
@@ -201,7 +201,7 @@ def run_unit_tests():
           len(big["examples"]) == 8 and big["complete"] is False
           and all(len(e["content"]) <= 120 for e in big["examples"]))
     os.environ["MINI_AGENT_TODAY"] = "2026-10-12"
-    importlib.reload(mini_agent)
+    importlib.reload(mini_agent.config); importlib.reload(mini_agent)
     check("u20_relative_this_week",
           mini_agent.relative_date_range("this week") == ("2026-10-12", "2026-10-18"))
     check("u21_relative_last_week",
@@ -223,22 +223,22 @@ def run_unit_tests():
         }
     def fake_s1_bad(state, questions, model=None, timeout=None):
         return None
-    real_s1 = mini_agent.call_systemone
-    real_chat = mini_agent.chat_completion
-    mini_agent.call_systemone = fake_s1_ok
-    mini_agent.chat_completion = lambda *a, **k: None  # no chat fallback in mock
+    real_s1 = mini_agent.router.call_systemone
+    real_chat = mini_agent.router.chat_completion
+    mini_agent.router.call_systemone = fake_s1_ok
+    mini_agent.router.chat_completion = lambda *a, **k: None  # no chat fallback in mock
     u, ms = mini_agent.system_one_understand("what kept me occupied recently during the current week", quiet=True)
     check("u26_s1_mock_work", bool(u and u["intent"] == "work" and u["range"]["start"] == "2026-10-12"), str(u)[:80])
-    mini_agent.call_systemone = fake_s1_bad
+    mini_agent.router.call_systemone = fake_s1_bad
     u2, _ = mini_agent.system_one_understand("gibberish xyz", quiet=True)
     check("u27_s1_bad_json", u2 is None)
-    mini_agent.call_systemone = real_s1
-    mini_agent.chat_completion = real_chat
+    mini_agent.router.call_systemone = real_s1
+    mini_agent.router.chat_completion = real_chat
     check("u28_hc_present",
           mini_agent.high_confidence_rule("tell me about my work plans this week") is not None)
     # add_event parse + preview (no write without yes)
     os.environ["MINI_AGENT_TODAY"] = "2026-10-12"
-    importlib.reload(mini_agent)
+    importlib.reload(mini_agent.config); importlib.reload(mini_agent)
     d, title = mini_agent.parse_add_event(
         "向six数据库中增加一个今日的事件-印发中药饮片集采生产企业定期报告制度")
     check("u29_parse_add_event",
@@ -255,7 +255,7 @@ def run_unit_tests():
     sink = Path(tempfile.mkdtemp(prefix="create_sink_")) / "sink.jsonl"
     os.environ["MINI_AGENT_WORK_CREATE_SINK"] = str(sink)
     os.environ["MINI_AGENT_WORK_URL"] = ""
-    importlib.reload(mini_agent)
+    importlib.reload(mini_agent.config); importlib.reload(mini_agent)
     r_prev = mini_agent.run_add_event(
         "增加一个今日的事件-单元测试事项A", quiet=True, yes=False)
     check("u32_preview_no_write",
@@ -272,7 +272,7 @@ def run_unit_tests():
     # wishlist / missing skill
     wish = Path(tempfile.mkdtemp(prefix="wish_")) / "wishlist.jsonl"
     os.environ["MINI_AGENT_WISHLIST"] = str(wish)
-    importlib.reload(mini_agent)
+    importlib.reload(mini_agent.config); importlib.reload(mini_agent)
     check("u34_missing_skill_detect",
           mini_agent.looks_like_missing_skill("今天天气怎么样", "chat") is True)
     wr = mini_agent.run_missing_skill("今天天气怎么样", quiet=True, intent="chat")

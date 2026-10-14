@@ -1,4 +1,27 @@
+# Python
 __pycache__/
-*.pyc
-trace.jsonl
+*.py[cod]
+*.egg-info/
+*.egg
+build/
+dist/
+.venv/
+venv/
+env/
+.python-version
+
+# 运行期产物（沙箱、trace、REPL 历史、wishlist）
 sandbox/
+trace.jsonl
+.mini-agent_history
+wishlist.jsonl
+
+# 编辑器 / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# 本地覆盖（切勿提交密钥）
+.env
+*.local
